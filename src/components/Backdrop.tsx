@@ -1,22 +1,31 @@
 import { Box, Text } from 'ink';
-import { COLOSSEUM_ART, TITLE } from '../ascii.js';
+import { Art } from './Art.js';
+import { COLOSSEUM_ART, COLOSSEUM_SMALL, TITLE, rule } from '../ascii.js';
 import { theme } from '../theme.js';
 
 interface Props {
   showArt?: boolean;
   subtitle?: string;
+  /** Rows available; the art shrinks rather than overflowing. */
+  rows?: number;
 }
 
-/** Title + faint colosseum art used on the setup and result screens. */
-export function Backdrop({ showArt = true, subtitle }: Props) {
+/** The title plate: amphitheatre, wordmark, and a line of subtitle. */
+export function Backdrop({ showArt = true, subtitle, rows = 40 }: Props) {
+  const roomy = rows >= 34;
+  const art = roomy ? COLOSSEUM_ART : COLOSSEUM_SMALL;
+
   return (
     <Box flexDirection="column" alignItems="center">
-      <Text color={theme.gold}>{TITLE}</Text>
-      {subtitle ? <Text color={theme.faint}>{subtitle}</Text> : null}
-      {showArt ? (
-        <Text color={theme.dim} dimColor>
-          {COLOSSEUM_ART}
-        </Text>
+      {showArt ? <Art art={art} from={1} to={7} /> : null}
+      <Art art={TITLE} from={0} to={5} />
+      <Box marginTop={showArt ? 0 : 0}>
+        <Text color={theme.dim}>{rule(44, '✦')}</Text>
+      </Box>
+      {subtitle ? (
+        <Box marginTop={1}>
+          <Text color={theme.faint}>{subtitle}</Text>
+        </Box>
       ) : null}
     </Box>
   );

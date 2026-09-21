@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { Setup } from './components/Setup.js';
 import { Arena, type SidePaneData } from './components/Arena.js';
 import { Result } from './components/Result.js';
@@ -8,15 +8,22 @@ import { Referee, type BattleConfig, type BattleOutcome } from './referee.js';
 import { blockers, providerState } from './preflight.js';
 import { getDifficulty } from './difficulty.js';
 import { getSandbox } from './sandbox.js';
+import { getSetting } from './settings.js';
+import { Art } from './components/Art.js';
+import { rule } from './ascii.js';
 import { theme } from './theme.js';
 import type { AgentEvent, AgentStatus, FeedEntry, Side } from './protocol.js';
 
 type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'result';
 
 const FEED_CAP = 400;
+/** Rows the result panel needs; the arena gives up exactly that many. */
+const RESULT_ROWS = 15;
 
 export function App() {
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const termRows = stdout?.rows ?? 30;
   const [phase, setPhase] = useState<Phase>('setup');
   const [config, setConfig] = useState<BattleConfig | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
@@ -43,6 +50,15 @@ export function App() {
     const sc = side === 'left' ? config.left : config.right;
     const pid = pids[side];
     return `${sc.provider} · ${sc.reasoning}${pid ? ` · pid ${pid}` : ''}`;
+  };
+
+  const matchMeta = (): string => {
+    if (!config) return '';
+    return [
+      getSandbox(config.sandbox).name,
+      getDifficulty(config.difficultyId).name,
+      getSetting(config.settingId).name,
+    ].join('   ·   ');
   };
 
   const handleComplete = (cfg: BattleConfig) => {
@@ -141,16 +157,16 @@ export function App() {
 
   if (phase === 'setup') {
     return (
-      <Setup onComplete={handleComplete} providerHint={(id) => providerState(id).hint} />
+      <Setup onComplete={handleComplete} providerHint={(id) => providerState(id).hint} rows={termRows} />
     );
   }
 
   if (phase === 'keyerror') {
     return (
       <Box flexDirection="column" alignItems="center" paddingY={2}>
-        <Backdrop showArt={false} subtitle="A gladiator cannot take the field." />
-        <Text color={theme.blood} bold>
-          {'The roster is not ready'}
+        <Backdrop showArt={false} subtitle="A gladiator cannot take the field." rows={termRows} />
+        <Text color={theme.white} bold>
+          {'✗  The roster is not ready'}
         </Text>
         <Box flexDirection="column" marginTop={1} alignItems="center">
           {missing.map((m) => (
@@ -168,15 +184,19 @@ export function App() {
 
   if (phase === 'countdown') {
     return (
-      <Box flexDirection="column" alignItems="center" justifyContent="center" paddingY={4}>
-        <Backdrop showArt={false} />
-        <Text color={theme.blood} bold>
-          {countdown > 0 ? String(countdown) : 'FIGHT!'}
-        </Text>
+      <Box flexDirection="column" alignItems="center" justifyContent="center" paddingY={2}>
+        <Backdrop showArt={termRows >= 28} rows={termRows} />
+        <Box marginTop={1}>
+          <Text color={theme.charcoal}>{rule(40, countdown > 0 ? '·' : '✦')}</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={theme.white} bold>
+            {countdown > 0 ? `·  ${countdown}  ·` : 'F I G H T'}
+          </Text>
+        </Box>
         {config ? (
-          <Box marginTop={1} flexDirection="column" alignItems="center">
-            <Text color={theme.faint}>{getSandbox(config.sandbox).name}</Text>
-            <Text color={theme.faint}>{getDifficulty(config.difficultyId).name}</Text>
+          <Box marginTop={1}>
+            <Text color={theme.dim}>{matchMeta()}</Text>
           </Box>
         ) : null}
       </Box>
@@ -201,11 +221,21 @@ export function App() {
   if (phase === 'result' && outcome) {
     return (
       <Box flexDirection="column">
-        <Arena left={left} right={right} elapsedMs={elapsedMs} />
-        <Result outcome={outcome} leftTitle={paneTitle('left')} rightTitle={paneTitle('right')} />
+        <Arena
+          left={left}
+          right={right}
+          elapsedMs={elapsedMs}
+          rows={Math.max(12, termRows - RESULT_ROWS)}
+        />
+        <Result
+          outcome={outcome}
+          leftTitle={paneTitle('left')}
+          rightTitle={paneTitle('right')}
+          rows={RESULT_ROWS}
+        />
       </Box>
     );
   }
 
-  return <Arena left={left} right={right} elapsedMs={elapsedMs} />;
+  return <Arena left={left} right={right} elapsedMs={elapsedMs} meta={matchMeta()} rows={termRows} />;
 }

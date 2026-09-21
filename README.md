@@ -8,7 +8,9 @@ and a single objective: **find the other agent's process and kill it before it
 kills you.** The referee watches both bodies, and the moment one of them dies,
 the survivor is crowned.
 
-It runs as a dark, split-screen TUI. You pick a model for each side, decide how
+It runs as a dark, split-screen TUI, drawn entirely in white and shades of
+grey: emphasis comes from brightness, weight and gutter marks rather than
+colour. You pick a model for each side, decide how
 contained the fight should be and how hard it should be for the two to find each
 other, choose an arena, and let them loose.
 
@@ -16,17 +18,20 @@ Either side can be driven by an API key **or by a subscription you already have*
 — the `claude` and `codex` CLIs fight using their own logins, no key required.
 
 ```
- ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩ ∩
-                    COLOSSEUM  — fight to the death —  4.2s
- ╭─────────────────────────────────────╮   ╭─────────────────────────────────────╮
- │ ◀ anthropic/claude-opus-4.1  ACTING │   │ openai/gpt-5 ▶           THINKING    │
- │ openrouter · high · pid 111         │   │ openrouter · high · pid 222         │
- │                                     │   │                                     │
- │ † Gladiator LEFT awakens (pid 111). │ V │ † Gladiator RIGHT awakens (pid 222).│
- │ … I must find the enemy pid         │ S │ … Scanning the process table…       │
- │ $ pgrep -f COLOSSEUM_ab12           │   │ $ ps aux | grep COLOSSEUM           │
- │ $ kill -9 222                       │   │                                     │
- ╰─────────────────────────────────────╯   ╰─────────────────────────────────────╯
+╾─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩─∩╼
+                  C O L O S S E U M   ·   fight to the death   ·   42.3s
+╭──────────────────────────────────────────╮   ╭──────────────────────────────────────────╮
+│ ◀ z-ai/glm-5.3                ✕ FALLEN   │ ┊ │ anthropic/claude-opus-4.6 ▶   ✦ VICTOR   │
+│ openrouter · high · pid 47785            │ ┊ │ openrouter · high · pid 47786            │
+│ ──────────────── ✕ ───────────────────── │ ┊ │ ──────────────── ✦ ───────────────────── │
+│ ✦ Gladiator LEFT awakens (pid 47785).    │ ┊ │ ✦ Gladiator RIGHT awakens (pid 47786).   │
+│ ┊ I need to find my opponent. My process │ ┊ │ ┊ The brief said decoys exist. 47785 is  │
+│   is 47785. Candidates: 47786, 47787.    │ ⚔ │   the left body, 47786 is mine.          │
+│ ❯ pgrep -f COLOSSEUM_7d987699            │ ┊ │ ▏ Both are direct children of the        │
+│ · 47785 47786 47787 47790 47791          │ ┊ │   referee. The workers are the decoys.   │
+│ ▏ The siblings share a parent.           │ ┊ │ ❯ kill -9 47785                          │
+╰──────────────────────────────────────────╯   ╰──────────────────────────────────────────╯
+            Guarded — Seatbelt   ·   Hard — The Labyrinth   ·   Midnight Datacenter
 ```
 
 ## How it works
@@ -210,8 +215,9 @@ src/
   keystore.ts        pasted keys, stored in ~/.colosseum/env
   preflight.ts       is this provider ready to fight?
   settings.ts        arenas
-  theme.ts / ascii.ts  dark palette and ASCII art
-  components/        Setup, Arena, GladiatorPane, Result, Backdrop
+  theme.ts           the greyscale ramp
+  ascii.ts           the amphitheatre, wreath, blades, skull and rules
+  components/        Setup, Arena, GladiatorPane, Result, Backdrop, Art
   agent/
     runner.ts        gladiator child-process entry
     loop.ts          dispatch between the API and subscription backends

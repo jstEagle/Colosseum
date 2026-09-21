@@ -21,6 +21,8 @@ interface Option {
 interface Props {
   onComplete: (cfg: BattleConfig) => void;
   providerHint: (provider: string) => string;
+  /** Terminal height, so the title plate can shrink instead of overflowing. */
+  rows?: number;
 }
 
 type StepKey =
@@ -66,7 +68,7 @@ function printable(input: string): string {
 
 type Selection = Record<StepKey, string>;
 
-export function Setup({ onComplete, providerHint }: Props) {
+export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
   const [sel, setSel] = useState<Selection>({
     leftProvider: 'openrouter',
     leftKey: '',
@@ -397,7 +399,7 @@ export function Setup({ onComplete, providerHint }: Props) {
 
   return (
     <Box flexDirection="column">
-      <Backdrop showArt={false} subtitle="Two agents enter. One process leaves." />
+      <Backdrop showArt={rows >= 30} rows={rows} subtitle="Two agents enter. One process leaves." />
       <Box justifyContent="center" marginBottom={1}>
         <Text color={theme.faint}>{`step ${position + 1}/${visible.length}   ${footer()}`}</Text>
       </Box>
