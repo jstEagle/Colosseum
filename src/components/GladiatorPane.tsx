@@ -48,7 +48,8 @@ function statusColor(status: AgentStatus): string {
 }
 
 export function GladiatorPane({ side, title, subtitle, color, status, feed, width, height }: Props) {
-  const bodyHeight = Math.max(3, height - 4);
+  // Reserve rows for: 2 borders + header + subtitle + the body's top margin.
+  const bodyHeight = Math.max(1, height - 5);
   const visible = feed.slice(-bodyHeight);
 
   return (
