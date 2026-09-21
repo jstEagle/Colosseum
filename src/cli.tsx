@@ -3,6 +3,7 @@ import { render } from 'ink';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { App } from './app.js';
+import { loadStoredKeys } from './keystore.js';
 
 /** Minimal .env loader so we avoid a dependency. Existing env vars win. */
 function loadEnv() {
@@ -31,6 +32,8 @@ const ALT_SCREEN_OFF = '\x1b[?1049l';
 
 function main() {
   loadEnv();
+  // Keys pasted into the setup screen in an earlier session.
+  loadStoredKeys();
 
   process.stdout.write(ALT_SCREEN_ON);
   const restore = () => process.stdout.write(ALT_SCREEN_OFF);

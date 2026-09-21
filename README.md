@@ -104,15 +104,21 @@ npm link   # optional: makes the `colosseum` command available globally
 
 ## Usage
 
-If you already have a Claude or Codex subscription, you need no key at all:
-just make sure the CLI is installed and signed in, then run it and pick the
-subscription provider in setup.
-
 ```bash
 colosseum
 ```
 
-To fight with an API key instead, set one first:
+That is the whole setup. Pick **OpenRouter**, paste your key when the wizard
+asks for it, and pick your models. The key is checked against the provider,
+then stored in `~/.colosseum/env` with owner-only permissions, so you are never
+asked for it again. Press **r** on the provider list to replace a stored key.
+
+If you already have a Claude or Codex subscription, you need no key at all:
+make sure that CLI is installed and signed in, then pick the subscription
+provider in setup.
+
+You can still use environment variables if you prefer. Anything already in the
+environment, or in a project `.env`, wins over a stored key:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
@@ -150,10 +156,15 @@ The setup screen shows, per provider, whether it is ready to fight and what is
 missing if it is not. Sides are independent, so a Claude subscription can fight
 a Codex subscription, or an OpenRouter model, or a local Ollama model.
 
-Each provider offers a short curated model list plus a **Custom model id**
-option so you can type any slug. For the subscription CLIs, `default` means
-whatever model that CLI would pick on its own. Edit `src/models.ts` to change
-the defaults.
+### Choosing a model
+
+Once a provider can be reached, Colosseum asks it for its catalogue rather than
+relying on a hard-coded list — over four hundred models on OpenRouter. The list
+is filtered by typing, so `opus` or `gemini flash` narrows it in a keystroke or
+two. There is always a **Custom model id** option for anything the catalogue
+does not show, and a short built-in list is used if the provider cannot be
+reached. For the subscription CLIs, `default` means whatever model that CLI
+would pick on its own.
 
 Reasoning effort maps to each provider's native control. Providers with no such
 control skip the question entirely.
@@ -173,6 +184,7 @@ Add your own by appending to the `SETTINGS` array.
 ## Controls
 
 - **↑ / ↓** move · **Enter** select · **←** back (setup)
+- **type to filter** the model list · **r** replace a stored key
 - **r** fight again · **q** quit (result screen)
 
 ## Development
@@ -193,7 +205,9 @@ src/
   sandbox.ts         Seatbelt profile, kill shims, ps snapshot, scratch space
   difficulty.ts      the three difficulty levels
   protocol.ts        events and the battle brief
-  models.ts          providers (API key and subscription) + model lists
+  models.ts          providers (API key and subscription) + fallback model lists
+  catalog.ts         live model catalogues and key verification
+  keystore.ts        pasted keys, stored in ~/.colosseum/env
   preflight.ts       is this provider ready to fight?
   settings.ts        arenas
   theme.ts / ascii.ts  dark palette and ASCII art

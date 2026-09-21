@@ -129,7 +129,9 @@ export function App() {
   useEffect(() => () => refereeRef.current?.cleanup(), []);
 
   useInput((input, key) => {
-    if (input === 'q' || (key.ctrl && input === 'c')) {
+    // During setup every letter belongs to the wizard: typing "qwen" into the
+    // model filter must not quit the game.
+    if ((input === 'q' && phase !== 'setup') || (key.ctrl && input === 'c')) {
       refereeRef.current?.cleanup();
       exit();
     }
