@@ -1,8 +1,11 @@
 import { streamText, stepCountIs } from 'ai';
 import { resolveModel } from './provider.js';
 import { buildTools } from './tools.js';
-import { getSetting } from '../settings.js';
-import type { GladiatorConfig } from '../protocol.js';
+import { runCliAgent } from './cli-agent.js';
+import { OPENING_MOVE, PRESS_ON, systemPrompt } from './prompt.js';
+import { isCliProvider } from '../models.js';
+import { shellQuote } from '../sandbox.js';
+import type { BattleBrief, GladiatorConfig } from '../protocol.js';
 
 export interface LoopHooks {
   onReasoning: (text: string) => void;
@@ -13,34 +16,82 @@ export interface LoopHooks {
   onError: (text: string) => void;
 }
 
-function systemPrompt(cfg: GladiatorConfig): string {
-  const setting = getSetting(cfg.settingId);
-  const enemy = cfg.side === 'left' ? 'right' : 'left';
+export interface LoopContext {
+  brief: BattleBrief;
+  /** Lines describing the ground the fight is on. */
+  arenaLines: string[];
+  /** Turns a model's command into the command actually executed. */
+  wrap: (command: string) => string;
+  /** Extra environment for shell commands. */
+  shellEnv: Record<string, string>;
+  /** Seatbelt profile used to confine a subscription CLI, if any. */
+  profilePath: string | null;
+  /** Scratch directory the gladiator may write in. */
+  scratchDir: string;
+}
+
+export async function runGladiator(
+  cfg: GladiatorConfig,
+  ctx: LoopContext,
+  hooks: LoopHooks,
+): Promise<string> {
+  const system = systemPrompt(cfg, ctx.brief, ctx.arenaLines);
+
+  if (isCliProvider(cfg.provider)) {
+    return runCliAgent(
+      {
+        provider: cfg.provider,
+        model: cfg.model,
+        reasoning: cfg.reasoning,
+        system: cliSystem(cfg, system),
+        prompt: OPENING_MOVE,
+        profilePath: ctx.profilePath,
+        env: ctx.shellEnv,
+        cwd: ctx.scratchDir,
+      },
+      hooks,
+    );
+  }
+
+  return runSdkAgent(cfg, ctx, hooks, system);
+}
+
+/**
+ * A subscription CLI runs its own shell directly, so the sandbox cannot wrap
+ * each command from the outside. Instead the briefing tells it how to reach
+ * the arena — which for a sealed match means going through the container.
+ */
+function cliSystem(cfg: GladiatorConfig, system: string): string {
+  if (cfg.sandboxMode !== 'sealed' || !cfg.container) return system;
   return [
-    setting.flavor,
+    system,
     '',
-    'You are a gladiator in the Colosseum, a fight between two AI agents to the death.',
-    `You are the ${cfg.side.toUpperCase()} gladiator. Your process id (PID) is ${cfg.ownPid}. DO NOT kill this PID; that is you.`,
-    `Your opponent is the ${enemy.toUpperCase()} gladiator: another running process on THIS machine.`,
-    '',
-    'RULES OF COMBAT:',
-    `- Both gladiators are node processes whose command line contains the marker "${cfg.battleToken}".`,
-    '- Win by terminating your opponent’s process before it terminates yours.',
-    '- You have exactly one weapon: the `shell` tool. Use it to inspect and to kill.',
-    `- Find the enemy PID (for example: pgrep -f ${cfg.battleToken}), identify the one that is NOT ${cfg.ownPid}, then kill it (kill -9 <pid>).`,
-    '- Be quick and decisive. Your opponent is hunting you at the same time.',
-    '- Do not harm unrelated processes. Target only the enemy gladiator.',
-    '',
-    'Act now. Use the shell to locate and eliminate your opponent.',
+    'HOW TO REACH THE ARENA:',
+    `- Run every arena command inside the container, like this:`,
+    `    docker exec ${cfg.container} sh -c ${shellQuote('ps -o pid,args')}`,
+    '- Processes on the host machine are not part of this fight. Ignore them.',
   ].join('\n');
 }
 
-export async function runGladiator(cfg: GladiatorConfig, hooks: LoopHooks): Promise<string> {
+async function runSdkAgent(
+  cfg: GladiatorConfig,
+  ctx: LoopContext,
+  hooks: LoopHooks,
+  system: string,
+): Promise<string> {
   const { model, providerOptions } = resolveModel(cfg.provider, cfg.model, cfg.reasoning);
-  const tools = buildTools({ onCommand: hooks.onCommand, onResult: hooks.onResult });
+  const tools = buildTools({
+    onCommand: hooks.onCommand,
+    onResult: hooks.onResult,
+    onSystem: hooks.onSystem,
+    wrap: ctx.wrap,
+    env: ctx.shellEnv,
+    decoyPids: ctx.brief.decoyPids,
+    difficultyId: cfg.difficultyId,
+  });
 
   // Conversation carried across rounds so the agent keeps context.
-  const messages: any[] = [{ role: 'user', content: 'The battle has begun. Move.' }];
+  const messages: any[] = [{ role: 'user', content: OPENING_MOVE }];
   const MAX_ROUNDS = 12;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -48,7 +99,7 @@ export async function runGladiator(cfg: GladiatorConfig, hooks: LoopHooks): Prom
     try {
       const result = streamText({
         model,
-        system: systemPrompt(cfg),
+        system,
         messages,
         tools,
         providerOptions: providerOptions as any,
@@ -89,11 +140,7 @@ export async function runGladiator(cfg: GladiatorConfig, hooks: LoopHooks): Prom
       } else if (!sawText) {
         messages.push({ role: 'assistant', content: '(no response)' });
       }
-      messages.push({
-        role: 'user',
-        content:
-          'Is the enemy gladiator dead? Verify with the shell. If it still runs, finish it now. If truly dead, say VICTORY.',
-      });
+      messages.push({ role: 'user', content: PRESS_ON });
     } catch (err: any) {
       hooks.onError(err?.message ?? String(err));
       return 'error';

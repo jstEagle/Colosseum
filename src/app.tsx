@@ -5,18 +5,15 @@ import { Arena, type SidePaneData } from './components/Arena.js';
 import { Result } from './components/Result.js';
 import { Backdrop } from './components/Backdrop.js';
 import { Referee, type BattleConfig, type BattleOutcome } from './referee.js';
-import { envKeyFor } from './agent/provider.js';
+import { blockers, providerState } from './preflight.js';
+import { getDifficulty } from './difficulty.js';
+import { getSandbox } from './sandbox.js';
 import { theme } from './theme.js';
 import type { AgentEvent, AgentStatus, FeedEntry, Side } from './protocol.js';
 
 type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'result';
 
 const FEED_CAP = 400;
-
-function hasKey(provider: string): boolean {
-  const v = process.env[envKeyFor(provider)];
-  return typeof v === 'string' && v.length > 0;
-}
 
 export function App() {
   const { exit } = useApp();
@@ -49,12 +46,10 @@ export function App() {
   };
 
   const handleComplete = (cfg: BattleConfig) => {
-    const miss: string[] = [];
-    if (!hasKey(cfg.left.provider)) miss.push(cfg.left.provider);
-    if (!hasKey(cfg.right.provider) && cfg.right.provider !== cfg.left.provider) miss.push(cfg.right.provider);
     setConfig(cfg);
+    const miss = blockers([cfg.left.provider, cfg.right.provider]);
     if (miss.length) {
-      setMissing([...new Set(miss)]);
+      setMissing(miss);
       setPhase('keyerror');
       return;
     }
@@ -117,7 +112,10 @@ export function App() {
     });
 
     setPhase('fighting');
-    ref.start(config);
+    void ref.start(config).catch((err: any) => {
+      setOutcome({ kind: 'draw', reason: err?.message ?? String(err) });
+      setPhase('result');
+    });
   };
 
   // Elapsed timer during the fight.
@@ -140,20 +138,22 @@ export function App() {
   });
 
   if (phase === 'setup') {
-    return <Setup onComplete={handleComplete} keyStatus={hasKey} />;
+    return (
+      <Setup onComplete={handleComplete} providerHint={(id) => providerState(id).hint} />
+    );
   }
 
   if (phase === 'keyerror') {
     return (
       <Box flexDirection="column" alignItems="center" paddingY={2}>
-        <Backdrop showArt={false} subtitle="An API key is missing." />
+        <Backdrop showArt={false} subtitle="A gladiator cannot take the field." />
         <Text color={theme.blood} bold>
-          No API key for: {missing.join(', ')}
+          {'The roster is not ready'}
         </Text>
         <Box flexDirection="column" marginTop={1} alignItems="center">
-          {missing.map((p) => (
-            <Text key={p} color={theme.faint}>
-              export {envKeyFor(p)}=your-key
+          {missing.map((m) => (
+            <Text key={m} color={theme.faint}>
+              {m}
             </Text>
           ))}
         </Box>
@@ -171,6 +171,12 @@ export function App() {
         <Text color={theme.blood} bold>
           {countdown > 0 ? String(countdown) : 'FIGHT!'}
         </Text>
+        {config ? (
+          <Box marginTop={1} flexDirection="column" alignItems="center">
+            <Text color={theme.faint}>{getSandbox(config.sandbox).name}</Text>
+            <Text color={theme.faint}>{getDifficulty(config.difficultyId).name}</Text>
+          </Box>
+        ) : null}
       </Box>
     );
   }

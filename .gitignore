@@ -5,3 +5,6 @@ dist/
 .env.local
 .DS_Store
 npm-debug.log*
+
+# Gladiator briefings, if a match is interrupted before it can shred them
+.brief-*

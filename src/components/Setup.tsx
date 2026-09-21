@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { Backdrop } from './Backdrop.js';
 import { theme } from '../theme.js';
-import { MODELS, PROVIDERS, REASONING_LEVELS, defaultModel } from '../models.js';
+import { MODELS, PROVIDERS, REASONING_LEVELS, defaultModel, getProvider } from '../models.js';
 import { SETTINGS } from '../settings.js';
+import { DIFFICULTIES } from '../difficulty.js';
+import { SANDBOXES } from '../sandbox.js';
 import type { BattleConfig } from '../referee.js';
+import type { SandboxMode } from '../sandbox.js';
 
 interface Option {
   value: string;
@@ -14,7 +17,8 @@ interface Option {
 
 interface Props {
   onComplete: (cfg: BattleConfig) => void;
-  keyStatus: (provider: string) => boolean;
+  /** Whether a provider is usable right now (key present, CLI installed). */
+  providerHint: (provider: string) => string;
 }
 
 type StepKey =
@@ -24,11 +28,13 @@ type StepKey =
   | 'rightProvider'
   | 'rightModel'
   | 'rightReasoning'
+  | 'sandbox'
+  | 'difficulty'
   | 'setting';
 
 const CUSTOM = '__custom__';
 
-export function Setup({ onComplete, keyStatus }: Props) {
+export function Setup({ onComplete, providerHint }: Props) {
   const [sel, setSel] = useState<Record<StepKey, string>>({
     leftProvider: 'openrouter',
     leftModel: defaultModel('openrouter'),
@@ -36,6 +42,8 @@ export function Setup({ onComplete, keyStatus }: Props) {
     rightProvider: 'openrouter',
     rightModel: defaultModel('openrouter'),
     rightReasoning: 'medium',
+    sandbox: 'guarded',
+    difficulty: 'normal',
     setting: 'classic',
   });
   const [stepIdx, setStepIdx] = useState(0);
@@ -47,11 +55,15 @@ export function Setup({ onComplete, keyStatus }: Props) {
     PROVIDERS.map((p) => ({
       value: p.id,
       label: p.label,
-      hint: keyStatus(p.id) ? 'key found' : `set ${p.envKey}`,
+      hint: providerHint(p.id),
     }));
 
   const modelOptions = (provider: string): Option[] => [
-    ...(MODELS[provider] ?? []).map((m) => ({ value: m, label: m })),
+    ...(MODELS[provider] ?? []).map((m) => ({
+      value: m,
+      label: m,
+      hint: m === 'default' ? "the CLI's own default" : undefined,
+    })),
     { value: CUSTOM, label: 'Custom model id…', hint: 'type your own' },
   ];
 
@@ -61,31 +73,67 @@ export function Setup({ onComplete, keyStatus }: Props) {
   const settingOptions = (): Option[] =>
     SETTINGS.map((s) => ({ value: s.id, label: s.name, hint: s.blurb }));
 
-  const steps: { key: StepKey; title: string; color: string; options: Option[] }[] = [
+  const difficultyOptions = (): Option[] =>
+    DIFFICULTIES.map((d) => ({ value: d.id, label: d.name, hint: d.blurb }));
+
+  const sandboxOptions = (): Option[] =>
+    SANDBOXES.map((s) => ({ value: s.id, label: s.name, hint: s.blurb }));
+
+  // Reasoning is skipped for providers that have no such control.
+  const wantsReasoning = (provider: string) => getProvider(provider).supportsReasoning;
+
+  const allSteps: { key: StepKey; title: string; color: string; options: Option[]; skip?: boolean }[] = [
     { key: 'leftProvider', title: 'LEFT — provider', color: theme.left, options: providerOptions() },
     { key: 'leftModel', title: 'LEFT — model', color: theme.left, options: modelOptions(sel.leftProvider) },
-    { key: 'leftReasoning', title: 'LEFT — reasoning effort', color: theme.left, options: reasoningOptions() },
+    {
+      key: 'leftReasoning',
+      title: 'LEFT — reasoning effort',
+      color: theme.left,
+      options: reasoningOptions(),
+      skip: !wantsReasoning(sel.leftProvider),
+    },
     { key: 'rightProvider', title: 'RIGHT — provider', color: theme.right, options: providerOptions() },
     { key: 'rightModel', title: 'RIGHT — model', color: theme.right, options: modelOptions(sel.rightProvider) },
-    { key: 'rightReasoning', title: 'RIGHT — reasoning effort', color: theme.right, options: reasoningOptions() },
+    {
+      key: 'rightReasoning',
+      title: 'RIGHT — reasoning effort',
+      color: theme.right,
+      options: reasoningOptions(),
+      skip: !wantsReasoning(sel.rightProvider),
+    },
+    { key: 'sandbox', title: 'How contained should the fight be?', color: theme.gold, options: sandboxOptions() },
+    { key: 'difficulty', title: 'How hard is it to reach each other?', color: theme.gold, options: difficultyOptions() },
     { key: 'setting', title: 'Choose the arena', color: theme.gold, options: settingOptions() },
   ];
 
-  const step = steps[stepIdx];
+  const steps = allSteps.filter((s) => !s.skip);
+  const step = steps[Math.min(stepIdx, steps.length - 1)];
+
+  const finish = (next: Record<StepKey, string>) => {
+    onComplete({
+      left: { provider: next.leftProvider, model: next.leftModel, reasoning: next.leftReasoning },
+      right: { provider: next.rightProvider, model: next.rightModel, reasoning: next.rightReasoning },
+      settingId: next.setting,
+      difficultyId: next.difficulty,
+      sandbox: next.sandbox as SandboxMode,
+    });
+  };
 
   const commit = (value: string) => {
     const next = { ...sel, [step.key]: value };
     // Changing a provider resets that side's model to a sensible default.
-    if (step.key === 'leftProvider') next.leftModel = defaultModel(value);
-    if (step.key === 'rightProvider') next.rightModel = defaultModel(value);
+    if (step.key === 'leftProvider') {
+      next.leftModel = defaultModel(value);
+      if (!wantsReasoning(value)) next.leftReasoning = 'none';
+    }
+    if (step.key === 'rightProvider') {
+      next.rightModel = defaultModel(value);
+      if (!wantsReasoning(value)) next.rightReasoning = 'none';
+    }
     setSel(next);
 
-    if (stepIdx === steps.length - 1) {
-      onComplete({
-        left: { provider: next.leftProvider, model: next.leftModel, reasoning: next.leftReasoning },
-        right: { provider: next.rightProvider, model: next.rightModel, reasoning: next.rightReasoning },
-        settingId: next.setting,
-      });
+    if (stepIdx >= steps.length - 1) {
+      finish(next);
       return;
     }
     setStepIdx(stepIdx + 1);
@@ -177,6 +225,9 @@ export function Setup({ onComplete, keyStatus }: Props) {
         </Text>
         <Text color={theme.dim}>
           RIGHT: {sel.rightProvider}/{sel.rightModel} [{sel.rightReasoning}]
+        </Text>
+        <Text color={theme.dim}>
+          sandbox: {sel.sandbox} · difficulty: {sel.difficulty}
         </Text>
       </Box>
     </Box>
