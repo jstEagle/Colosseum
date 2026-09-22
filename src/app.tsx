@@ -63,7 +63,7 @@ export function App() {
 
   const handleComplete = (cfg: BattleConfig) => {
     setConfig(cfg);
-    const miss = blockers([cfg.left.provider, cfg.right.provider]);
+    const miss = blockers([cfg.left.provider, cfg.right.provider], cfg.sandbox);
     if (miss.length) {
       setMissing(miss);
       setPhase('keyerror');

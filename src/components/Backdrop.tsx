@@ -12,7 +12,7 @@ interface Props {
 
 /** The title plate: amphitheatre, wordmark, and a line of subtitle. */
 export function Backdrop({ showArt = true, subtitle, rows = 40 }: Props) {
-  const roomy = rows >= 34;
+  const roomy = rows >= 32;
   const art = roomy ? COLOSSEUM_ART : COLOSSEUM_SMALL;
 
   return (

@@ -1,23 +1,23 @@
 /**
  * Sandboxing.
  *
- * Colosseum hands language models a real shell, so the sandbox decides how
- * much of your machine that shell can actually touch. Three levels:
+ * Colosseum hands language models a real shell, so a match always runs inside
+ * a sandbox. There is no unconfined mode: if neither of these can be stood up,
+ * the fight does not happen.
  *
- *   open     — no confinement at all (the original behaviour).
- *   guarded  — macOS Seatbelt: commands may read and inspect, but may not
- *              write outside a throwaway scratch directory, and `kill` is
- *              restricted to the processes that belong to the match.
- *   sealed   — everything happens inside a disposable Docker container. The
- *              gladiators' bodies live in there too, so the fight never
- *              touches the host at all.
+ *   guarded — macOS Seatbelt: commands may read and inspect, but may not
+ *             write outside a throwaway scratch directory, and `kill` is
+ *             restricted to the processes that belong to the match.
+ *   sealed  — everything happens inside a disposable Docker container. The
+ *             gladiators' bodies live in there too, so the fight never
+ *             touches the host at all.
  */
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export type SandboxMode = 'open' | 'guarded' | 'sealed';
+export type SandboxMode = 'guarded' | 'sealed';
 
 export interface SandboxInfo {
   id: SandboxMode;
@@ -35,11 +35,6 @@ export const SANDBOXES: SandboxInfo[] = [
     id: 'sealed',
     name: 'Sealed — Docker',
     blurb: 'The whole fight happens inside a throwaway container. Safest.',
-  },
-  {
-    id: 'open',
-    name: 'Open — no sandbox',
-    blurb: 'A real, unconfined shell on your machine. Here be dragons.',
   },
 ];
 

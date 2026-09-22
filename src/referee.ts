@@ -60,12 +60,19 @@ export class Referee extends EventEmitter {
   async start(cfg: BattleConfig) {
     const difficulty = getDifficulty(cfg.difficultyId);
 
-    // `guarded` needs Seatbelt; without it there is nothing to guard with.
-    let mode: SandboxMode = cfg.sandbox;
+    // A match always runs inside a sandbox. `guarded` needs Seatbelt, and
+    // without it there is nothing to guard with, so the fight is called off
+    // rather than quietly turned loose on the machine.
+    const mode: SandboxMode = cfg.sandbox;
     if (mode === 'guarded' && !seatbeltAvailable()) {
-      mode = 'open';
-      this.note('Seatbelt is unavailable on this platform — running unsandboxed.');
+      this.note('Seatbelt is unavailable on this platform, so a guarded match cannot be held.');
+      this.settle({
+        kind: 'draw',
+        reason: 'No sandbox available — choose the sealed arena, which needs Docker.',
+      });
+      return;
     }
+
     // Every match gets scratch space, even a sealed one: it is where the
     // gladiators' briefings live, and disposing it is what shreds them.
     this.scratch = new SandboxScratch();

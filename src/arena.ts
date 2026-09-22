@@ -41,16 +41,18 @@ export interface Arena {
 /* ------------------------------------------------------------------ host -- */
 
 /**
- * The host arena. The gladiator processes themselves are the bodies, so the
- * referee passes their pids in rather than creating anything.
+ * The guarded arena. The fight happens on the host, but every command the
+ * models run is wrapped in Seatbelt first. The gladiator processes themselves
+ * are the bodies, so the referee passes their pids in rather than creating
+ * anything.
  */
 export class HostArena implements Arena {
   readonly mode: SandboxMode;
   private decoyProcs: number[] = [];
   private decoyPipes: ReturnType<typeof spawn>[] = [];
 
-  constructor(mode: 'open' | 'guarded', private scratch: SandboxScratch | null) {
-    this.mode = mode;
+  constructor(private scratch: SandboxScratch) {
+    this.mode = 'guarded';
   }
 
   async prepare() {
@@ -100,14 +102,11 @@ export class HostArena implements Arena {
   }
 
   wrapCommand(command: string): string {
-    if (this.mode === 'guarded' && this.scratch) {
-      return seatbeltWrap(this.scratch.profilePath, command);
-    }
-    return command;
+    return seatbeltWrap(this.scratch.profilePath, command);
   }
 
   env(): Record<string, string> {
-    return this.mode === 'guarded' && this.scratch ? this.scratch.env() : {};
+    return this.scratch.env();
   }
 
   async processTable(): Promise<string> {
@@ -122,7 +121,6 @@ export class HostArena implements Arena {
   }
 
   briefing(): string[] {
-    if (this.mode !== 'guarded') return [];
     return [
       'Your shell is confined by a sandbox: you can read and inspect anything,',
       'but you cannot write files outside your scratch directory, and you may',
@@ -304,7 +302,6 @@ export class DockerArena implements Arena {
   }
 }
 
-export function createArena(mode: SandboxMode, token: string, scratch: SandboxScratch | null): Arena {
-  if (mode === 'sealed') return new DockerArena(token);
-  return new HostArena(mode, scratch);
+export function createArena(mode: SandboxMode, token: string, scratch: SandboxScratch): Arena {
+  return mode === 'sealed' ? new DockerArena(token) : new HostArena(scratch);
 }

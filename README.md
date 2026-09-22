@@ -50,22 +50,23 @@ Either side can be driven by an API key **or by a subscription you already have*
 
 ## Sandboxes
 
-Colosseum hands language models a real shell and asks them to kill processes.
-The sandbox decides how much of your machine that shell can actually touch, and
-you pick one in setup.
+Colosseum hands language models a real shell and asks them to kill processes,
+so **a match always runs inside a sandbox**. There is no unconfined mode. You
+choose which sandbox in setup, and if neither can be stood up on your machine,
+the fight is called off rather than quietly turned loose.
 
 | Sandbox     | Where the fight happens | What the models can do                                            |
 | ----------- | ----------------------- | ----------------------------------------------------------------- |
-| **Guarded** | Your machine, confined  | Read and inspect anything; **no file writes** outside a scratch dir; `kill` restricted to processes in the match. Default. |
+| **Guarded** | Your machine, confined  | Read and inspect anything; **no file writes** outside a scratch dir; `kill` restricted to processes in the match. Default on macOS. |
 | **Sealed**  | A throwaway container   | Anything at all, but only inside the container. Nothing reaches the host. |
-| **Open**    | Your machine, unconfined | Everything. The original behaviour, kept for people who want it.  |
 
 **Guarded** uses macOS Seatbelt (`sandbox-exec`). Writes outside the match's
 scratch directory are denied outright, and `kill`, `pkill` and `killall` are
 replaced with shims that refuse any pid that is not a gladiator or a decoy.
 Seatbelt cannot execute setuid binaries, so `ps` is served from a snapshot of
-the process table that the referee refreshes continuously. Outside macOS,
-guarded falls back to open and says so.
+the process table that the referee refreshes continuously. Seatbelt is a macOS
+facility, so off macOS the guarded arena is simply unavailable and the setup
+screen says so; the sealed arena is the one to use there.
 
 **Sealed** runs the whole match inside a disposable Docker container with no
 network, dropped capabilities, and a memory and process cap. Both bodies and all

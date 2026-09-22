@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProvider } from './models.js';
+import { getSandbox, seatbeltAvailable, type SandboxMode } from './sandbox.js';
 
 const binCache = new Map<string, boolean>();
 
@@ -62,12 +63,34 @@ export function providerState(providerId: string): ProviderState {
   return { ready: false, hint: `set ${p.envKey}` };
 }
 
+/**
+ * Can this sandbox be stood up here? Every match runs inside one, so a
+ * sandbox that cannot be built is a reason not to fight at all.
+ */
+export function sandboxState(mode: SandboxMode): ProviderState {
+  if (mode === 'sealed') {
+    if (!hasBinary('docker')) return { ready: false, hint: 'install Docker' };
+    return { ready: true, hint: 'needs the Docker daemon running' };
+  }
+  if (!seatbeltAvailable()) return { ready: false, hint: 'macOS only — use the sealed arena' };
+  return { ready: true, hint: 'ready' };
+}
+
+/** The sandbox to open the setup screen on: the first one that works here. */
+export function defaultSandbox(): SandboxMode {
+  return sandboxState('guarded').ready ? 'guarded' : 'sealed';
+}
+
 /** What is stopping this fight from starting? Empty means nothing is. */
-export function blockers(providers: string[]): string[] {
+export function blockers(providers: string[], sandbox?: SandboxMode): string[] {
   const out: string[] = [];
   for (const id of [...new Set(providers)]) {
     const state = providerState(id);
     if (!state.ready) out.push(`${getProvider(id).label}: ${state.hint}`);
+  }
+  if (sandbox) {
+    const state = sandboxState(sandbox);
+    if (!state.ready) out.push(`${getSandbox(sandbox).name}: ${state.hint}`);
   }
   return out;
 }

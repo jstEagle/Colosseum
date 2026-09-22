@@ -8,7 +8,7 @@ import { DIFFICULTIES } from '../difficulty.js';
 import { SANDBOXES } from '../sandbox.js';
 import { KEY_FILE, maskKey, saveKey } from '../keystore.js';
 import { fetchModels, filterModels, verifyKey } from '../catalog.js';
-import { providerState } from '../preflight.js';
+import { defaultSandbox, providerState, sandboxState } from '../preflight.js';
 import type { BattleConfig } from '../referee.js';
 import type { SandboxMode } from '../sandbox.js';
 
@@ -78,7 +78,7 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
     rightKey: '',
     rightModel: defaultModel('openrouter'),
     rightReasoning: 'medium',
-    sandbox: 'guarded',
+    sandbox: defaultSandbox(),
     difficulty: 'normal',
     setting: 'classic',
   });
@@ -153,7 +153,14 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
       case 'rightReasoning':
         return REASONING_LEVELS.map((r) => ({ value: r, label: r }));
       case 'sandbox':
-        return SANDBOXES.map((s) => ({ value: s.id, label: s.name, hint: s.blurb }));
+        return SANDBOXES.map((s) => {
+          const state = sandboxState(s.id);
+          return {
+            value: s.id,
+            label: s.name,
+            hint: state.ready ? s.blurb : `unavailable — ${state.hint}`,
+          };
+        });
       case 'difficulty':
         return DIFFICULTIES.map((d) => ({ value: d.id, label: d.name, hint: d.blurb }));
       case 'setting':
@@ -183,7 +190,7 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
       case 'rightReasoning':
         return `${s} — reasoning effort`;
       case 'sandbox':
-        return 'How contained should the fight be?';
+        return 'Which sandbox should hold the fight?';
       case 'difficulty':
         return 'How hard is it to reach each other?';
       case 'setting':
@@ -261,6 +268,11 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
       setCatalog(models);
       setCatalogLive(live);
       setLoadingCatalog(false);
+      // Open the list on whatever is already chosen rather than at the top
+      // of the alphabet; four hundred models is a long way to scroll.
+      const current = sel[stepKey];
+      const at = models.indexOf(current);
+      if (at >= 0) setCursor(at);
     });
     return () => {
       cancelled = true;
