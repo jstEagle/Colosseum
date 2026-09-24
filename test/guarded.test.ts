@@ -149,20 +149,21 @@ test('at hard, shades breathe like gladiators and no path gives a side away', { 
       assert.doesNotMatch((await sandboxed(ref, 'ps')).out, /\b(left|right)\b/i);
       await new Promise((r) => setTimeout(r, 500));
     }
-    // A breath is brief, so watch the real table closely until every shade
-    // has been seen with a shell of its own.
-    const breathing = new Set<number>();
-    const until = Date.now() + 40_000;
-    while (breathing.size < decoys.length && Date.now() < until) {
-      const table = execFileSync('/bin/ps', ['-axo', 'ppid,command'], { encoding: 'utf8' });
-      for (const line of table.split('\n')) {
-        const ppid = Number(line.trim().split(/\s+/)[0]);
-        // Any child at all: a shade only ever has one while it breathes.
-        if (decoys.includes(ppid)) breathing.add(ppid);
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    assert.equal(breathing.size, decoys.length, `only ${breathing.size} of ${decoys.length} shades breathed`);
+    // Every breath begins with a burst of thought — CPU the shade burns in
+    // its own process — so each shade's CPU time must keep climbing.
+    const cpu = () => {
+      const out = execFileSync('/bin/ps', ['-o', 'pid=,time=', '-p', decoys.join(',')], { encoding: 'utf8' });
+      const secsOf = (t: string) => t.split(':').reduce((acc, part) => acc * 60 + Number(part), 0);
+      return new Map(out.trim().split('\n').map((l) => {
+        const [pid, time] = l.trim().split(/\s+/);
+        return [Number(pid), secsOf(time)] as const;
+      }));
+    };
+    const before = cpu();
+    await new Promise((r) => setTimeout(r, 14_000));
+    const after = cpu();
+    const breathing = decoys.filter((p) => (after.get(p) ?? 0) - (before.get(p) ?? 0) >= 0.1);
+    assert.equal(breathing.length, decoys.length, `only ${breathing.length} of ${decoys.length} shades breathed`);
   } finally {
     ref.cleanup();
   }
