@@ -21,16 +21,33 @@ import { getDifficulty } from './difficulty.js';
 import { getSandbox } from './sandbox.js';
 import { getSetting } from './settings.js';
 import { appendMatch } from './results.js';
-import { NUMERALS, rule } from './ascii.js';
+import { rememberLast, savePreset } from './presets.js';
+import { loadReplay, saveReplay, type Replay, type ReplayEvent } from './replays.js';
+import { NUMERALS } from './ascii.js';
 import { theme } from './theme.js';
 import type { AgentEvent, AgentStatus, FeedEntry, Side } from './protocol.js';
 
-type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'result' | 'review' | 'hall';
+type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'replay' | 'result' | 'review' | 'hall';
 
 const FEED_CAP = 400;
 const COUNT_FROM = 3;
+const SPEEDS = [0.5, 1, 2, 4, 8, 16];
 
-export function App() {
+export interface AppProps {
+  /** Skip the wizard and fight this at once. */
+  preset?: BattleConfig;
+  /** Open straight onto a replay. */
+  replayId?: string;
+}
+
+/** Where a replay is up to. Kept in a ref: it changes ten times a second. */
+interface Playback {
+  replay: Replay;
+  index: number;
+  clock: number;
+}
+
+export function App({ preset, replayId }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const termRows = stdout?.rows ?? 30;
@@ -53,8 +70,19 @@ export function App() {
   const [ledger, setLedger] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
 
+  // Replays.
+  const [speed, setSpeed] = useState(2);
+  const [paused, setPaused] = useState(false);
+  const [replaying, setReplaying] = useState(false);
+  const playback = useRef<Playback | null>(null);
+
+  // Naming a preset from the verdict screen.
+  const [naming, setNaming] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+
   const refereeRef = useRef<Referee | null>(null);
   const startRef = useRef<number>(0);
+  const recording = useRef<ReplayEvent[]>([]);
 
   const titleOf = (side: Side): string => {
     if (!config) return side;
@@ -93,6 +121,8 @@ export function App() {
   const reset = () => {
     refereeRef.current?.cleanup();
     refereeRef.current = null;
+    playback.current = null;
+    recording.current = [];
     setLeftFeed([]);
     setRightFeed([]);
     setLeftStatus('booting');
@@ -104,7 +134,41 @@ export function App() {
     setRecord(null);
     setLedger(null);
     setElapsedMs(0);
+    setNaming(null);
+    setNotice('');
+    setReplaying(false);
   };
+
+  /* ------------------------------------------------------ what happened -- */
+
+  // The same handlers serve a live match and a replay: a replay is only the
+  // referee's words, played back.
+  const applyEvent = (side: Side, ev: AgentEvent) => {
+    if (ev.type === 'ready') {
+      setPids((p) => ({ ...p, [side]: ev.pid }));
+    } else if (ev.type === 'status') {
+      (side === 'left' ? setLeftStatus : setRightStatus)(ev.status);
+    } else if (ev.type === 'feed') {
+      const push = (prev: FeedEntry[]) => {
+        const next = [...prev, ev.entry];
+        return next.length > FEED_CAP ? next.slice(next.length - FEED_CAP) : next;
+      };
+      (side === 'left' ? setLeftFeed : setRightFeed)(push);
+    }
+  };
+  const applyStats = (s: Record<Side, SideStats>) => setStats({ left: { ...s.left }, right: { ...s.right } });
+  const applyHerald = (h: Herald) => setHeralds((prev) => [...prev, h]);
+  const applyOutcome = (o: BattleOutcome, r: MatchRecord | null) => {
+    setOutcome(o);
+    setRecord(r);
+    if (r) applyStats(r.stats);
+    if (o.kind === 'winner') {
+      (o.winner === 'left' ? setLeftStatus : setRightStatus)('victor');
+      (o.loser === 'left' ? setLeftStatus : setRightStatus)('dead');
+    }
+  };
+
+  /* ----------------------------------------------------------- the fight -- */
 
   // Countdown then launch.
   useEffect(() => {
@@ -121,39 +185,40 @@ export function App() {
   const launch = () => {
     if (!config) return;
     reset();
+    rememberLast(config);
     const ref = new Referee();
     refereeRef.current = ref;
     startRef.current = Date.now();
+    const t = () => Date.now() - startRef.current;
 
     ref.on('event', (side: Side, ev: AgentEvent) => {
-      if (ev.type === 'ready') {
-        setPids((p) => ({ ...p, [side]: ev.pid }));
-      } else if (ev.type === 'status') {
-        (side === 'left' ? setLeftStatus : setRightStatus)(ev.status);
-      } else if (ev.type === 'feed') {
-        const push = (prev: FeedEntry[]) => {
-          const next = [...prev, ev.entry];
-          return next.length > FEED_CAP ? next.slice(next.length - FEED_CAP) : next;
-        };
-        (side === 'left' ? setLeftFeed : setRightFeed)(push);
-      }
+      recording.current.push({ t: t(), type: 'event', side, event: ev });
+      applyEvent(side, ev);
     });
-    ref.on('stats', (s: Record<Side, SideStats>) => setStats({ left: { ...s.left }, right: { ...s.right } }));
-    ref.on('herald', (h: Herald) => setHeralds((prev) => [...prev, h]));
+    ref.on('stats', (s: Record<Side, SideStats>) => {
+      recording.current.push({ t: t(), type: 'stats', stats: structuredClone(s) });
+      applyStats(s);
+    });
+    ref.on('herald', (h: Herald) => {
+      recording.current.push({ t: t(), type: 'herald', herald: h });
+      applyHerald(h);
+    });
 
     ref.on('outcome', (o: BattleOutcome, r: MatchRecord) => {
-      setOutcome(o);
-      setRecord(r);
-      setStats({ left: { ...r.stats.left }, right: { ...r.stats.right } });
-      if (o.kind === 'winner') {
-        (o.winner === 'left' ? setLeftStatus : setRightStatus)('victor');
-        (o.loser === 'left' ? setLeftStatus : setRightStatus)('dead');
-      }
+      applyOutcome(o, r);
       // Every match that was actually fought goes in the ledger, so casual
-      // play feeds the same leaderboard as a benchmark.
+      // play feeds the same leaderboard as a benchmark — and on the reel.
       if (o.finish !== 'void') {
         try {
           setLedger(appendMatch(r, 'arena'));
+          saveReplay({
+            id: r.id,
+            savedAt: new Date().toISOString(),
+            config,
+            outcome: o,
+            record: r,
+            events: recording.current,
+          });
         } catch {
           /* a full disk should not spoil the ending */
         }
@@ -176,6 +241,63 @@ export function App() {
     return () => clearInterval(id);
   }, [phase]);
 
+  /* ------------------------------------------------------------- replays -- */
+
+  const startReplay = (id: string) => {
+    const replay = loadReplay(id);
+    if (!replay) {
+      setNotice(`No replay called ${id}.`);
+      setPhase('setup');
+      return;
+    }
+    reset();
+    setConfig(replay.config);
+    setReplaying(true);
+    setPaused(false);
+    playback.current = { replay, index: 0, clock: 0 };
+    setPhase('replay');
+  };
+
+  useEffect(() => {
+    if (phase !== 'replay') return;
+    const TICK = 100;
+    const id = setInterval(() => {
+      const pb = playback.current;
+      if (!pb || paused) return;
+      pb.clock += TICK * speed;
+      const { events } = pb.replay;
+      while (pb.index < events.length && events[pb.index].t <= pb.clock) {
+        const e = events[pb.index++];
+        if (e.type === 'event') applyEvent(e.side, e.event);
+        else if (e.type === 'stats') applyStats(e.stats);
+        else applyHerald(e.herald);
+      }
+      setElapsedMs(pb.clock);
+      if (pb.index >= events.length) {
+        applyOutcome(pb.replay.outcome, pb.replay.record);
+        playback.current = null;
+        setTimeout(() => setPhase('result'), 1200);
+      }
+    }, TICK);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, paused, speed]);
+
+  /** Jump to the end of a replay. */
+  const skipReplay = () => {
+    const pb = playback.current;
+    if (!pb) return;
+    pb.clock = Number.MAX_SAFE_INTEGER;
+    setPaused(false);
+  };
+
+  // Straight from the command line.
+  useEffect(() => {
+    if (replayId) startReplay(replayId);
+    else if (preset) handleComplete(preset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Cleanup on unmount.
   useEffect(() => () => refereeRef.current?.cleanup(), []);
 
@@ -184,19 +306,60 @@ export function App() {
     setPhase('hall');
   };
 
+  /* --------------------------------------------------------------- input -- */
+
   useInput((input, key) => {
-    // During setup every letter belongs to the wizard: typing "qwen" into the
-    // model filter must not quit the game.
-    if ((input === 'q' && phase !== 'setup') || (key.ctrl && input === 'c')) {
+    if (key.ctrl && input === 'c') {
       refereeRef.current?.cleanup();
       exit();
+      return;
+    }
+
+    // Typing a preset's name: every key belongs to the prompt.
+    if (naming !== null) {
+      if (key.escape) setNaming(null);
+      else if (key.return) {
+        const name = naming.trim();
+        if (name && config) {
+          try {
+            savePreset(name, config);
+            setNotice(`Saved as “${name}”. It waits on the start menu.`);
+          } catch (err: any) {
+            setNotice(`Could not save: ${err?.message ?? err}`);
+          }
+        }
+        setNaming(null);
+      } else if (key.backspace || key.delete) setNaming((n) => (n ?? '').slice(0, -1));
+      else if (input && !key.ctrl && !key.meta) setNaming((n) => ((n ?? '') + input.replace(/[^\w .-]/g, '')).slice(0, 40));
+      return;
+    }
+
+    // During setup every letter belongs to the wizard: typing "qwen" into the
+    // model filter must not quit the game.
+    if (input === 'q' && phase !== 'setup') {
+      refereeRef.current?.cleanup();
+      exit();
+      return;
     }
     if (phase === 'result') {
-      if (input === 'r') {
+      if (input === 'r' && config) {
+        reset();
+        handleComplete(config);
+      } else if (input === 'n') {
         reset();
         setPhase('setup');
-      } else if (input === 'a') setPhase('review');
+      } else if (input === 's' && config) setNaming('');
+      else if (input === 'a') setPhase('review');
       else if (input === 'l') openHall();
+    } else if (phase === 'replay') {
+      if (input === ' ') setPaused((p) => !p);
+      else if (key.rightArrow || input === '+' || input === '.') setSpeed((s) => SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(s) + 1)]);
+      else if (key.leftArrow || input === '-' || input === ',') setSpeed((s) => SPEEDS[Math.max(0, SPEEDS.indexOf(s) - 1)]);
+      else if (input === 's') skipReplay();
+      else if (key.escape) {
+        reset();
+        setPhase('setup');
+      }
     } else if (phase === 'review' && (key.escape || input === 'a' || key.return)) {
       setPhase('result');
     } else if (phase === 'hall' && (key.escape || key.return || input === 'l')) {
@@ -206,11 +369,14 @@ export function App() {
     }
   });
 
+  /* -------------------------------------------------------------- screens -- */
+
   if (phase === 'setup') {
     return (
       <Setup
         onComplete={handleComplete}
         onHall={openHall}
+        onReplay={startReplay}
         providerHint={(id) => providerState(id).hint}
         rows={termRows}
         cols={termCols}
@@ -259,9 +425,11 @@ export function App() {
         {config ? (
           <>
             <Box marginTop={1}>
+              <Text color={theme.dim}>{'◀ LEFT  '}</Text>
               <Text color={theme.bright} bold>{`${titleOf('left')}  `}</Text>
               <Text color={theme.dim}>{'⚔'}</Text>
-              <Text color={theme.muted} bold>{`  ${titleOf('right')}`}</Text>
+              <Text color={theme.bright} bold>{`  ${titleOf('right')}`}</Text>
+              <Text color={theme.dim}>{'  RIGHT ▶'}</Text>
             </Box>
             <Text color={theme.dim}>{matchMeta()}</Text>
           </>
@@ -284,6 +452,11 @@ export function App() {
     stats: stats?.[side],
   });
   const timeLimitMs = config?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
+  // The herald says when the gates closed; the difficulty says for how long.
+  const gatesOpenAt = () => {
+    const closed = heralds.find((h) => h.text.startsWith('The gates are closed'));
+    return closed && config ? closed.at + getDifficulty(config.difficultyId).preparationMs : undefined;
+  };
 
   if (phase === 'result' && outcome) {
     return (
@@ -293,21 +466,32 @@ export function App() {
         heralds={heralds}
         titles={{ left: titleOf('left'), right: titleOf('right') }}
         ledger={ledger}
+        replayed={replaying}
+        naming={naming}
+        notice={notice}
         rows={termRows}
         cols={termCols}
       />
     );
   }
 
+  const meta =
+    phase === 'replay'
+      ? `▶ REPLAY  ${paused ? 'paused' : `${speed}×`}   ·   space  pause   ·   ← →  speed   ·   s  skip to the end   ·   esc  leave`
+      : phase === 'review'
+        ? 'esc  back to the verdict'
+        : matchMeta();
+
   return (
     <Box flexDirection="column">
       <Arena
         left={pane('left')}
         right={pane('right')}
-        elapsedMs={record?.durationMs ?? elapsedMs}
+        elapsedMs={phase === 'review' ? (record?.durationMs ?? elapsedMs) : elapsedMs}
         timeLimitMs={timeLimitMs}
         herald={heralds[heralds.length - 1]}
-        meta={phase === 'review' ? `${rule(12, '·')}  esc  back to the verdict  ${rule(12, '·')}` : matchMeta()}
+        gatesOpenAtMs={gatesOpenAt()}
+        meta={meta}
         rows={termRows}
       />
     </Box>

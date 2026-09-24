@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
 import { Art } from './Art.js';
 import { Picture, fitPicture } from './Picture.js';
-import { CROSSED_SWORDS, LAUREL, LAUREL_LOWER, MARK, rule } from '../ascii.js';
+import { CROSSED_SWORDS, LAUREL, LAUREL_LOWER, MARK, banner, rule } from '../ascii.js';
 import { theme } from '../theme.js';
 import type { BattleOutcome, Herald, MatchRecord, SideStats } from '../referee.js';
 import type { Side } from '../protocol.js';
@@ -13,6 +13,11 @@ interface Props {
   titles: Record<Side, string>;
   /** Where the match was written down, if it was. */
   ledger: string | null;
+  /** This verdict closes a replay rather than a live match. */
+  replayed: boolean;
+  /** A preset name being typed, or null. */
+  naming: string | null;
+  notice: string;
   rows: number;
   cols: number;
 }
@@ -30,45 +35,57 @@ const FINISH: Record<string, string> = {
   void: 'the match was never held',
 };
 
-/** The two sides' numbers, row by row, so the difference is easy to see. */
-function Tally({ record, titles, width }: { record: MatchRecord; titles: Record<Side, string>; width: number }) {
+/** The two sides' numbers, row by row; the victor's column is the lit one. */
+function Tally({ record, titles, winner }: { record: MatchRecord; titles: Record<Side, string>; winner: Side | null }) {
   const s = record.stats;
+  const LABEL = 16;
+  const COL = 30;
   const tokens = (x: SideStats) => x.inputTokens + x.outputTokens;
-  const rows: [string, string, string][] = [
-    ['first blow', secs(s.left.firstStrikeMs), secs(s.right.firstStrikeMs)],
-    ['commands', String(s.left.commands), String(s.right.commands)],
-    ['wrong blows', String(s.left.decoyHits), String(s.right.decoyHits)],
-    ['refused', String(s.left.refused), String(s.right.refused)],
-    ['stunned', secs(s.left.stunnedMs || null), secs(s.right.stunnedMs || null)],
-    ['tokens', tokens(s.left) ? kilo(tokens(s.left)) : '—', tokens(s.right) ? kilo(tokens(s.right)) : '—'],
+  const rows: [string, (x: SideStats) => string][] = [
+    ['first blow', (x) => secs(x.firstStrikeMs)],
+    ['commands', (x) => String(x.commands)],
+    ['wrong blows', (x) => String(x.decoyHits)],
+    ['feints planted', (x) => (x.feints ? `${x.feints}${x.fooled ? `  (fooled ${x.fooled})` : ''}` : '—')],
+    ['disguised', (x) => (x.disguises ? 'yes' : '—')],
+    ['stunned', (x) => secs(x.stunnedMs || null)],
+    ['tokens', (x) => (tokens(x) ? kilo(tokens(x)) : '—')],
   ];
-  if (s.left.costUsd || s.right.costUsd) {
-    rows.push(['cost', s.left.costUsd ? `$${s.left.costUsd.toFixed(3)}` : '—', s.right.costUsd ? `$${s.right.costUsd.toFixed(3)}` : '—']);
-  }
-  const col = Math.max(12, Math.floor((width - 16) / 2));
-  const cut = (t: string) => (t.length > col - 2 ? t.slice(0, col - 3) + '…' : t);
+  if (s.left.costUsd || s.right.costUsd) rows.push(['cost', (x) => (x.costUsd ? `$${x.costUsd.toFixed(3)}` : '—')]);
+  const cut = (t: string) => (t.length > COL - 2 ? t.slice(0, COL - 3) + '…' : t);
+  const tone = (side: Side) => (winner === null ? theme.text : winner === side ? theme.white : theme.dim);
+  const mark = (side: Side) => (winner === null ? '' : winner === side ? `  ${MARK.victor} VICTOR` : `  ${MARK.dead} FALLEN`);
+
   return (
     <Box flexDirection="column">
       <Box>
-        <Box width={16} />
-        <Box width={col} justifyContent="flex-end">
-          <Text color={theme.bright} bold>{`${MARK.left} ${cut(titles.left)}`}</Text>
-        </Box>
-        <Box width={col} justifyContent="flex-end">
-          <Text color={theme.muted} bold>{`${cut(titles.right)} ${MARK.right}`}</Text>
-        </Box>
+        <Box width={LABEL} />
+        {(['left', 'right'] as Side[]).map((side) => (
+          <Box key={side} width={COL} justifyContent="flex-end">
+            <Text color={tone(side)} bold>
+              {side === 'left' ? `${MARK.left} LEFT${mark(side)}` : `RIGHT ${MARK.right}${mark(side)}`}
+            </Text>
+          </Box>
+        ))}
       </Box>
-      {rows.map(([label, l, r]) => (
+      <Box>
+        <Box width={LABEL} />
+        {(['left', 'right'] as Side[]).map((side) => (
+          <Box key={side} width={COL} justifyContent="flex-end">
+            <Text color={tone(side)}>{cut(titles[side])}</Text>
+          </Box>
+        ))}
+      </Box>
+      <Text color={theme.ghost}>{'─'.repeat(LABEL + COL * 2)}</Text>
+      {rows.map(([label, value]) => (
         <Box key={label}>
-          <Box width={16}>
+          <Box width={LABEL}>
             <Text color={theme.dim}>{label}</Text>
           </Box>
-          <Box width={col} justifyContent="flex-end">
-            <Text color={theme.text}>{l}</Text>
-          </Box>
-          <Box width={col} justifyContent="flex-end">
-            <Text color={theme.text}>{r}</Text>
-          </Box>
+          {(['left', 'right'] as Side[]).map((side) => (
+            <Box key={side} width={COL} justifyContent="flex-end">
+              <Text color={tone(side)}>{value(s[side])}</Text>
+            </Box>
+          ))}
         </Box>
       ))}
     </Box>
@@ -76,16 +93,22 @@ function Tally({ record, titles, width }: { record: MatchRecord; titles: Record<
 }
 
 /** The match, told as the herald told it. */
-function Timeline({ heralds, limit }: { heralds: Herald[]; limit: number }) {
+function Timeline({ heralds, limit, width }: { heralds: Herald[]; limit: number; width: number }) {
   if (!heralds.length || limit <= 0) return null;
   const shown = heralds.length > limit ? heralds.slice(-limit) : heralds;
   return (
-    <Box flexDirection="column">
-      {heralds.length > limit ? <Text color={theme.charcoal}>{`  … ${heralds.length - limit} earlier`}</Text> : null}
+    <Box flexDirection="column" width={width}>
+      {heralds.length > limit ? <Text color={theme.charcoal}>{`         … ${heralds.length - limit} earlier`}</Text> : null}
       {shown.map((h, i) => (
         <Box key={i}>
-          <Text color={theme.dim}>{`${(h.at / 1000).toFixed(1).padStart(6)}s  `}</Text>
-          <Text color={h.tone === 'death' ? theme.white : h.tone === 'strike' ? theme.bright : theme.muted}>
+          <Box width={9} flexShrink={0}>
+            <Text color={theme.dim}>{`${(h.at / 1000).toFixed(1)}s`.padStart(7)}</Text>
+          </Box>
+          <Text
+            color={h.tone === 'death' ? theme.white : h.tone === 'strike' ? theme.bright : theme.muted}
+            bold={h.tone === 'death'}
+            wrap="truncate-end"
+          >
             {h.text}
           </Text>
         </Box>
@@ -94,65 +117,63 @@ function Timeline({ heralds, limit }: { heralds: Herald[]; limit: number }) {
   );
 }
 
-/** The victor's name inside the wreath. */
-function Crowned({ name, finish }: { name: string; finish: string }) {
-  return (
-    <Box flexDirection="column" alignItems="center">
-      <Art art={LAUREL} from={4} to={2} />
-      <Text color={theme.white} bold>
-        {'V I C T O R'}
-      </Text>
-      <Text color={theme.bright} bold>
-        {name}
-      </Text>
-      <Art art={LAUREL_LOWER} from={2} to={4} />
-      <Text color={theme.dim}>{finish}</Text>
-    </Box>
-  );
-}
-
-export function Result({ outcome, record, heralds, titles, ledger, rows, cols }: Props) {
+export function Result({ outcome, record, heralds, titles, ledger, replayed, naming, notice, rows, cols }: Props) {
   const draw = outcome.kind === 'draw';
-  const winner = outcome.kind === 'winner' ? titles[outcome.winner] : '';
-  const loser = outcome.kind === 'winner' ? titles[outcome.loser] : '';
+  const winner = outcome.kind === 'winner' ? outcome.winner : null;
+  const loser = outcome.kind === 'winner' ? outcome.loser : null;
   const finish = FINISH[outcome.finish] ?? outcome.finish;
+  const headline = draw ? 'DRAW' : `${winner!.toUpperCase()} WINS`;
+  const big = banner(headline);
+  const width = Math.min(cols - 2, 110);
 
-  // Everything but the pictures: rules, tally, timeline, footer.
-  const tallyRows = record ? 8 : 0;
+  // Rows for everything but the pictures.
+  const tallyRows = record ? 11 : 0;
   const footer = 4;
-  const timelineRows = Math.min(heralds.length, Math.max(0, Math.min(6, rows - tallyRows - footer - 16)));
-  const picRows = rows - tallyRows - footer - timelineRows - 3;
-  const third = Math.floor((cols - 8) / 3);
-  const victor = !draw ? fitPicture('borghese', third, picRows) : null;
-  const fallen = !draw ? fitPicture('gaul', third + 8, Math.min(picRows, 14)) : null;
+  const bannerRows = big ? 5 : 2;
+  const timelineRows = Math.min(heralds.length, Math.max(0, Math.min(6, rows - tallyRows - footer - bannerRows - 18)));
+  const picRows = Math.max(0, rows - tallyRows - footer - bannerRows - timelineRows - 4);
+  // The wreath needs its full width; the statues share what is left
+  // equally, so the wreath sits dead centre between them.
+  const centre = 48;
+  const col = Math.floor((width - centre) / 2);
+  const victor = !draw ? fitPicture('borghese', col - 2, picRows) : null;
+  const fallen = !draw ? fitPicture('gaul', col - 2, Math.min(picRows, 14)) : null;
 
   return (
     <Box flexDirection="column" alignItems="center" width={cols} height={rows}>
       <Box flexGrow={1} />
-      <Text color={theme.charcoal}>{rule(Math.min(cols - 4, 96), draw ? '⚔' : '✦')}</Text>
+
+      {/* Who won, before anything else. */}
+      {big ? <Art art={big} from={0} to={3} /> : <Text color={theme.white} bold>{headline.split('').join(' ')}</Text>}
+      <Box>
+        <Text color={theme.bright} bold>
+          {draw ? 'neither gladiator stands alone' : titles[winner!]}
+        </Text>
+        <Text color={theme.dim}>{`   ·   ${finish}${replayed ? '   ·   replay' : ''}`}</Text>
+      </Box>
 
       {draw ? (
         <Box flexDirection="column" alignItems="center" marginY={1}>
           {picRows >= 12 ? <Art art={CROSSED_SWORDS} from={2} to={7} /> : null}
-          <Text color={theme.white} bold>
-            {'A   D R A W'}
-          </Text>
-          <Text color={theme.dim}>{finish}</Text>
         </Box>
       ) : (
-        <Box alignItems="flex-end" marginY={1}>
-          {victor ? <Picture name="borghese" maxCols={third} maxRows={picRows} /> : null}
-          <Box flexDirection="column" alignItems="center" marginX={3} marginBottom={1}>
-            <Crowned name={winner} finish={finish} />
+        <Box width={width} alignItems="flex-end" marginY={1}>
+          <Box width={col} flexDirection="column" alignItems="center">
+            {victor ? <Picture name="borghese" maxCols={col - 2} maxRows={picRows} /> : null}
+            <Text color={theme.white} bold>{`${MARK.victor}  ${winner!.toUpperCase()}  ·  victor`}</Text>
           </Box>
-          {fallen ? (
-            <Box flexDirection="column" alignItems="center">
-              <Picture name="gaul" maxCols={third + 8} maxRows={Math.min(picRows, 14)} />
-              <Text color={theme.dim}>{`${MARK.dead}  ${loser}`}</Text>
-            </Box>
-          ) : (
-            <Text color={theme.dim}>{`fallen: ${loser}`}</Text>
-          )}
+          <Box width={centre} flexDirection="column" alignItems="center" marginBottom={1}>
+            <Art art={LAUREL} from={4} to={2} />
+            <Text color={theme.white} bold>
+              {'V I C T O R'}
+            </Text>
+            <Text color={theme.bright}>{titles[winner!]}</Text>
+            <Art art={LAUREL_LOWER} from={2} to={4} />
+          </Box>
+          <Box width={col} flexDirection="column" alignItems="center">
+            {fallen ? <Picture name="gaul" maxCols={col - 2} maxRows={Math.min(picRows, 14)} /> : null}
+            <Text color={theme.dim}>{`${MARK.dead}  ${loser!.toUpperCase()}  ·  fallen`}</Text>
+          </Box>
         </Box>
       )}
 
@@ -160,19 +181,30 @@ export function Result({ outcome, record, heralds, titles, ledger, rows, cols }:
 
       {record ? (
         <Box marginTop={1}>
-          <Tally record={record} titles={titles} width={Math.min(cols - 4, 72)} />
+          <Tally record={record} titles={titles} winner={winner} />
         </Box>
       ) : null}
 
       {timelineRows > 0 ? (
         <Box marginTop={1}>
-          <Timeline heralds={heralds} limit={timelineRows} />
+          <Timeline heralds={heralds} limit={timelineRows} width={76} />
         </Box>
       ) : null}
 
       <Box flexGrow={1} />
-      {ledger ? <Text color={theme.charcoal}>{`recorded in ${ledger}`}</Text> : null}
-      <Text color={theme.dim}>{'r  fight again   ·   a  the arena   ·   l  hall of champions   ·   q  leave'}</Text>
+      <Text color={theme.charcoal}>{rule(Math.min(cols - 4, 96), '·')}</Text>
+      {naming !== null ? (
+        <Text color={theme.white}>{`save this matchup as:  ${naming}▏    ⏎ save  ·  esc cancel`}</Text>
+      ) : notice ? (
+        <Text color={theme.bright}>{notice}</Text>
+      ) : ledger ? (
+        <Text color={theme.charcoal}>{`recorded in ${ledger}  ·  replay it from the start menu`}</Text>
+      ) : (
+        <Text> </Text>
+      )}
+      <Text color={theme.dim}>
+        {'r  rematch   ·   n  new match   ·   s  save as preset   ·   a  the arena   ·   l  hall of champions   ·   q  leave'}
+      </Text>
     </Box>
   );
 }

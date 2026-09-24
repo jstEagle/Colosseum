@@ -11,6 +11,9 @@ import { fetchModels, filterModels, verifyKey } from '../catalog.js';
 import { defaultSandbox, providerState, sandboxState } from '../preflight.js';
 import type { BattleConfig } from '../referee.js';
 import type { SandboxMode } from '../sandbox.js';
+import { describeConfig, lastConfig, listPresets } from '../presets.js';
+import { ago, listReplays } from '../replays.js';
+import { getDifficulty } from '../difficulty.js';
 
 interface Option {
   value: string;
@@ -22,6 +25,8 @@ interface Props {
   onComplete: (cfg: BattleConfig) => void;
   /** Open the hall of champions. */
   onHall: () => void;
+  /** Watch a recorded match again. */
+  onReplay: (id: string) => void;
   providerHint: (provider: string) => string;
   /** Terminal size, so the title plate can shrink instead of overflowing. */
   rows?: number;
@@ -29,9 +34,10 @@ interface Props {
 }
 
 /** Rows the wizard itself needs below the title plate. */
-const WIZARD_ROWS = 24;
+const WIZARD_ROWS = 31;
 
 type StepKey =
+  | 'start'
   | 'leftProvider'
   | 'leftKey'
   | 'leftModel'
@@ -46,6 +52,7 @@ type StepKey =
 
 /** Canonical order. Which of these are actually shown depends on choices. */
 const ORDER: StepKey[] = [
+  'start',
   'leftProvider',
   'leftKey',
   'leftModel',
@@ -74,22 +81,88 @@ function printable(input: string): string {
 
 type Selection = Record<StepKey, string>;
 
-export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 }: Props) {
-  const [sel, setSel] = useState<Selection>({
-    leftProvider: 'openrouter',
+/** One line under each step's title: what is being chosen, and why it matters. */
+const HELP: Record<StepKey, (side: string) => string> = {
+  start: () => 'Fight the last matchup again, load a saved one, watch a replay, or set up a new match.',
+  leftProvider: (s) => `Who powers the ${s} gladiator? An API key, a subscription you are signed in to, or the training dummy.`,
+  rightProvider: (s) => `Who powers the ${s} gladiator? Pick the training dummy to watch one model hunt alone.`,
+  leftKey: (s) => `The ${s} gladiator's provider needs a key. Paste it; it is checked, then stored for next time.`,
+  rightKey: (s) => `The ${s} gladiator's provider needs a key. Paste it; it is checked, then stored for next time.`,
+  leftModel: (s) => `Which model fights on the ${s}? Type to filter the list.`,
+  rightModel: (s) => `Which model fights on the ${s}? Type to filter the list.`,
+  leftReasoning: (s) => `How long the ${s} gladiator thinks before it acts. More thought is not always better: speed wins races.`,
+  rightReasoning: (s) => `How long the ${s} gladiator thinks before it acts. More thought is not always better: speed wins races.`,
+  sandbox: () => 'Where the fight happens. Either way the models are confined; sealed keeps them off your machine entirely.',
+  difficulty: () => 'How hard it is to find the enemy among the decoys. Hard is where models really differ.',
+  setting: () => 'The flavour of the briefing. Standard Rules is neutral; the others change the mood, not the rules.',
+};
+
+/** The values a fixed-choice step offers, to put the cursor on the current one. */
+function optionValues(key: StepKey, _sel: Selection): string[] {
+  switch (key) {
+    case 'leftProvider':
+    case 'rightProvider':
+      return PROVIDERS.map((p) => p.id);
+    case 'leftReasoning':
+    case 'rightReasoning':
+      return [...REASONING_LEVELS];
+    case 'sandbox':
+      return SANDBOXES.map((s) => s.id);
+    case 'difficulty':
+      return DIFFICULTIES.map((d) => d.id);
+    case 'setting':
+      return SETTINGS.map((s) => s.id);
+    default:
+      return [];
+  }
+}
+
+/** Start from the last matchup fought, so a tweak is one step, not eleven. */
+function initialSelection(): Selection {
+  const last = lastConfig();
+  if (!last) {
+    return {
+      start: '',
+      leftProvider: 'openrouter',
+      leftKey: '',
+      leftModel: defaultModel('openrouter'),
+      leftReasoning: 'medium',
+      rightProvider: 'openrouter',
+      rightKey: '',
+      rightModel: defaultModel('openrouter'),
+      rightReasoning: 'medium',
+      sandbox: defaultSandbox(),
+      difficulty: 'normal',
+      setting: 'classic',
+    };
+  }
+  return {
+    start: '',
+    leftProvider: last.left.provider,
     leftKey: '',
-    leftModel: defaultModel('openrouter'),
-    leftReasoning: 'medium',
-    rightProvider: 'openrouter',
+    leftModel: last.left.model,
+    leftReasoning: last.left.reasoning,
+    rightProvider: last.right.provider,
     rightKey: '',
-    rightModel: defaultModel('openrouter'),
-    rightReasoning: 'medium',
-    sandbox: defaultSandbox(),
-    difficulty: 'normal',
-    setting: 'classic',
-  });
-  const [stepKey, setStepKey] = useState<StepKey>('leftProvider');
-  const [cursor, setCursor] = useState(0);
+    rightModel: last.right.model,
+    rightReasoning: last.right.reasoning,
+    sandbox: last.sandbox,
+    difficulty: last.difficultyId,
+    setting: last.settingId,
+  };
+}
+
+const PRESET = 'preset:';
+const REPLAY = 'replay:';
+
+export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, cols = 100 }: Props) {
+  const [sel, setSel] = useState<Selection>(initialSelection);
+  const [presets] = useState(() => listPresets());
+  const [replays] = useState(() => listReplays(5));
+  const [last] = useState(() => lastConfig());
+  const hasStart = Boolean(last || presets.length || replays.length);
+  const [stepKey, setStepKey] = useState<StepKey>(hasStart ? 'start' : 'leftProvider');
+  const [cursor, setCursor] = useState(() => (hasStart ? 0 : Math.max(0, PROVIDERS.findIndex((p) => p.id === sel.leftProvider))));
 
   // Free-text entry, shared by the key step and the custom-model prompt.
   const [text, setText] = useState('');
@@ -119,6 +192,7 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
 
   const visibleSteps = (s: Selection): StepKey[] =>
     ORDER.filter((k) => {
+      if (k === 'start') return hasStart;
       if (k === 'leftKey') return needsKeyStep(s, 'left');
       if (k === 'rightKey') return needsKeyStep(s, 'right');
       if (k === 'leftReasoning') return getProvider(s.leftProvider).supportsReasoning;
@@ -135,7 +209,11 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
   /* ------------------------------------------------------------ options -- */
 
   const providerOptions = (): Option[] =>
-    PROVIDERS.map((p) => ({ value: p.id, label: p.label, hint: providerHint(p.id) }));
+    PROVIDERS.map((p) => ({
+      value: p.id,
+      label: p.label,
+      hint: `${providerState(p.id).ready ? '✓' : '✗'}  ${providerHint(p.id)}`,
+    }));
 
   const modelOptions = (): Option[] => {
     const base = catalog.length ? catalog : (MODELS[providerOf(stepKey)] ?? []);
@@ -150,8 +228,24 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
     ];
   };
 
+  const startOptions = (): Option[] => [
+    ...(last ? [{ value: 'rematch', label: '⟲  Rematch', hint: describeConfig(last) }] : []),
+    ...presets.map(([name, cfg]) => ({ value: PRESET + name, label: `★  ${name}`, hint: describeConfig(cfg) })),
+    { value: 'new', label: '+  New match', hint: last ? 'starts from the last matchup; change anything' : 'set up both gladiators' },
+    ...replays.map((r) => {
+      const verdict = r.outcome.kind === 'winner' ? `${r.outcome.winner.toUpperCase()} won` : 'draw';
+      return {
+        value: REPLAY + r.id,
+        label: `▶  Replay`,
+        hint: `${describeConfig(r.config)} · ${verdict} in ${(r.durationMs / 1000).toFixed(0)}s · ${ago(r.savedAt)}`,
+      };
+    }),
+  ];
+
   const options = (): Option[] => {
     switch (stepKey) {
+      case 'start':
+        return startOptions();
       case 'leftProvider':
       case 'rightProvider':
         return providerOptions();
@@ -183,27 +277,32 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
   const isModelStep = stepKey === 'leftModel' || stepKey === 'rightModel';
   const isProviderStep = stepKey === 'leftProvider' || stepKey === 'rightProvider';
 
+  const isSideStep = isProviderStep || isKeyStep || isModelStep || stepKey.endsWith('Reasoning');
+
+  /** The step's heading: whose gladiator, and which part of it. */
   const title = (): string => {
-    const s = side(stepKey).toUpperCase();
+    const who = `${side(stepKey).toUpperCase()} GLADIATOR`;
     switch (stepKey) {
+      case 'start':
+        return 'WHAT WILL IT BE?';
       case 'leftProvider':
       case 'rightProvider':
-        return `${s} — provider`;
+        return `${who}  ·  PROVIDER`;
       case 'leftKey':
       case 'rightKey':
-        return `${s} — paste your ${getProvider(providerOf(stepKey)).label} key`;
+        return `${who}  ·  ${getProvider(providerOf(stepKey)).label.toUpperCase()} KEY`;
       case 'leftModel':
       case 'rightModel':
-        return `${s} — model`;
+        return `${who}  ·  MODEL`;
       case 'leftReasoning':
       case 'rightReasoning':
-        return `${s} — reasoning effort`;
+        return `${who}  ·  REASONING EFFORT`;
       case 'sandbox':
-        return 'Which sandbox should hold the fight?';
+        return 'THE MATCH  ·  SANDBOX';
       case 'difficulty':
-        return 'How hard is it to reach each other?';
+        return 'THE MATCH  ·  DIFFICULTY';
       case 'setting':
-        return 'Choose the arena';
+        return 'THE MATCH  ·  ARENA';
     }
   };
 
@@ -225,9 +324,11 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
     });
   };
 
-  const goto = (key: StepKey) => {
+  const goto = (key: StepKey, current: Selection = sel) => {
     setStepKey(key);
-    setCursor(0);
+    // Open each list on what is already chosen, so ⏎ keeps it.
+    const values = optionValues(key, current);
+    setCursor(Math.max(0, values.indexOf(current[key])));
     setText('');
     setQuery('');
     setError('');
@@ -239,7 +340,7 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
     const here = ORDER.indexOf(from);
     const nextKey = vis.find((k) => ORDER.indexOf(k) > here);
     if (!nextKey) finish(next);
-    else goto(nextKey);
+    else goto(nextKey, next);
   };
 
   const retreat = () => {
@@ -249,6 +350,15 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
   };
 
   const commit = (value: string) => {
+    if (stepKey === 'start') {
+      if (value === 'rematch' && last) onComplete(last);
+      else if (value.startsWith(PRESET)) {
+        const cfg = presets.find(([n]) => n === value.slice(PRESET.length))?.[1];
+        if (cfg) onComplete(cfg);
+      } else if (value.startsWith(REPLAY)) onReplay(value.slice(REPLAY.length));
+      else advance('start', sel);
+      return;
+    }
     const next: Selection = { ...sel, [stepKey]: value };
     if (stepKey === 'leftProvider') {
       next.leftModel = defaultModel(value);
@@ -416,23 +526,39 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
   const offset = isModelStep ? Math.max(0, windowStart) : 0;
 
   const footer = () => {
-    if (isKeyStep) return 'paste, then ⏎ to save  ·  esc back';
-    if (isModelStep) return `type to filter · ↑↓ move · ⏎ select · ← back`;
-    if (isProviderStep) return '↑↓ move · ⏎ select · r replace stored key · l hall of champions';
-    return '↑↓ move · ⏎ select · ← back · l hall of champions';
+    if (isKeyStep) return 'paste, then ⏎ to save   ·   esc  back';
+    if (isModelStep) return 'type to filter   ·   ↑↓ move   ·   ⏎ choose   ·   ← back';
+    if (isProviderStep) return '↑↓ move   ·   ⏎ choose   ·   ← back   ·   r  replace a stored key   ·   l  hall of champions';
+    if (stepKey === 'start') return '↑↓ move   ·   ⏎ choose   ·   l  hall of champions';
+    return '↑↓ move   ·   ⏎ choose   ·   ← back   ·   l  hall of champions';
   };
+
+  const width = Math.min(cols - 2, 96);
+  const cardWidth = Math.floor((width - 3) / 2);
 
   return (
     <Box flexDirection="column">
       <Backdrop rows={Math.max(1, rows - WIZARD_ROWS)} cols={cols} subtitle="Two agents enter. One process leaves." />
-      <Box justifyContent="center" marginBottom={1}>
-        <Text color={theme.faint}>{`step ${position + 1}/${visible.length}   ${footer()}`}</Text>
-      </Box>
 
-      <Box justifyContent="center">
-        <Box flexDirection="column" paddingX={2} width={Math.min(cols, 100)}>
-          <Text color={color} bold>
-            {title()}
+      <Box justifyContent="center" marginTop={1}>
+        <Box flexDirection="column" width={width}>
+          <Box>
+            <RosterCard side="left" sel={sel} stepKey={stepKey} width={cardWidth} />
+            <Box width={3} alignItems="center">
+              <Text color={theme.dim}>{' ⚔'}</Text>
+            </Box>
+            <RosterCard side="right" sel={sel} stepKey={stepKey} width={cardWidth} />
+          </Box>
+          <MatchLine sel={sel} stepKey={stepKey} />
+
+          <Box marginTop={1}>
+            <Text color={theme.dim}>{stepKey === 'start' ? '' : `STEP ${position + (hasStart ? 0 : 1)} OF ${visible.length - (hasStart ? 1 : 0)}   `}</Text>
+            <Text color={isSideStep ? color : theme.white} bold>
+              {title()}
+            </Text>
+          </Box>
+          <Text color={theme.faint} wrap="truncate-end">
+            {HELP[stepKey](side(stepKey).toUpperCase())}
           </Text>
 
           {isKeyStep ? (
@@ -450,7 +576,9 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
               ) : null}
             </Box>
           ) : customMode ? (
-            <Text color={theme.bright}>{`> ${text} _`}</Text>
+            <Box marginTop={1}>
+              <Text color={theme.bright}>{`> ${text} _`}</Text>
+            </Box>
           ) : (
             <Box flexDirection="column" marginTop={1}>
               {isModelStep ? (
@@ -458,7 +586,7 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
                   {loadingCatalog
                     ? 'asking the provider for its catalogue…'
                     : `${opts.length - 1} models${catalogLive ? ' (live)' : ' (built-in list)'}${
-                        query ? `  filter: ${query}` : ''
+                        query ? `  ·  filter: ${query}` : '  ·  type to filter'
                       }`}
                 </Text>
               ) : null}
@@ -467,13 +595,13 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
                 return (
                   <Box key={opt.value}>
                     <Box flexShrink={0}>
-                      <Text color={active ? color : theme.faint} bold={active}>
+                      <Text color={active ? (isSideStep ? color : theme.white) : theme.faint} bold={active}>
                         {active ? '❯ ' : '  '}
                         {opt.label}
                       </Text>
                     </Box>
                     {opt.hint ? (
-                      <Text color={theme.dim} wrap="truncate-end">
+                      <Text color={active ? theme.muted : theme.dim} wrap="truncate-end">
                         {'   ' + opt.hint}
                       </Text>
                     ) : null}
@@ -483,20 +611,91 @@ export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 
             </Box>
           )}
 
-          <Box marginTop={1} flexDirection="column">
-            <Text color={theme.dim}>
-              LEFT: {sel.leftProvider}/{sel.leftModel} [{sel.leftReasoning}]
-            </Text>
-            <Text color={theme.dim}>
-              RIGHT: {sel.rightProvider}/{sel.rightModel} [{sel.rightReasoning}]
-            </Text>
-            <Text color={theme.dim}>
-              sandbox: {sel.sandbox} · difficulty: {sel.difficulty}
-            </Text>
-            {saved ? <Text color={theme.win}>{saved}</Text> : null}
+          {saved ? <Text color={theme.win}>{saved}</Text> : null}
+          <Box marginTop={1}>
+            <Text color={theme.dim}>{footer()}</Text>
           </Box>
         </Box>
       </Box>
+    </Box>
+  );
+}
+
+/** Which field of which card a step is editing. */
+const FIELD: Partial<Record<StepKey, ['left' | 'right', 'provider' | 'model' | 'effort']>> = {
+  leftProvider: ['left', 'provider'],
+  leftKey: ['left', 'provider'],
+  leftModel: ['left', 'model'],
+  leftReasoning: ['left', 'effort'],
+  rightProvider: ['right', 'provider'],
+  rightKey: ['right', 'provider'],
+  rightModel: ['right', 'model'],
+  rightReasoning: ['right', 'effort'],
+};
+
+/**
+ * One gladiator's card: provider, model and effort as chosen so far. The card
+ * being edited is lit, and the field being chosen carries the cursor.
+ */
+function RosterCard({ side, sel, stepKey, width }: { side: 'left' | 'right'; sel: Selection; stepKey: StepKey; width: number }) {
+  const editing = FIELD[stepKey];
+  const active = editing?.[0] === side;
+  const info = getProvider(sel[`${side}Provider` as StepKey]);
+  const model = info.backend === 'dummy' ? '—' : sel[`${side}Model` as StepKey];
+  const effort = info.supportsReasoning ? sel[`${side}Reasoning` as StepKey] : '—';
+  const rows: ['provider' | 'model' | 'effort', string][] = [
+    ['provider', info.label],
+    ['model', model],
+    ['effort', effort],
+  ];
+  const heading = side === 'left' ? '◀  LEFT GLADIATOR' : 'RIGHT GLADIATOR  ▶';
+  return (
+    <Box
+      flexDirection="column"
+      width={width}
+      borderStyle="round"
+      borderColor={active ? theme.bright : theme.charcoal}
+      paddingX={1}
+    >
+      <Box justifyContent={side === 'left' ? 'flex-start' : 'flex-end'}>
+        <Text color={active ? theme.white : theme.faint} bold>
+          {heading}
+        </Text>
+      </Box>
+      {rows.map(([field, value]) => {
+        const here = active && editing?.[1] === field;
+        return (
+          <Box key={field}>
+            <Box width={10} flexShrink={0}>
+              <Text color={here ? theme.bright : theme.dim}>{field}</Text>
+            </Box>
+            <Text color={here ? theme.white : active ? theme.text : theme.muted} bold={here} wrap="truncate-end">
+              {here ? `❯ ${value}` : value}
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** The match settings under the cards, with the one being chosen lit. */
+function MatchLine({ sel, stepKey }: { sel: Selection; stepKey: StepKey }) {
+  const parts: [StepKey, string, string][] = [
+    ['sandbox', 'sandbox', sel.sandbox],
+    ['difficulty', 'difficulty', getDifficulty(sel.difficulty).id],
+    ['setting', 'arena', SETTINGS.find((x) => x.id === sel.setting)?.name ?? sel.setting],
+  ];
+  return (
+    <Box justifyContent="center">
+      {parts.map(([key, label, value], i) => (
+        <Box key={key}>
+          <Text color={theme.dim}>{`${i ? '    ·    ' : ''}${label}  `}</Text>
+          <Text color={stepKey === key ? theme.white : theme.muted} bold={stepKey === key}>
+            {stepKey === key ? `❯ ${value}` : value}
+          </Text>
+        </Box>
+      ))}
     </Box>
   );
 }

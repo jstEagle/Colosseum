@@ -21,6 +21,8 @@ interface Props {
   timeLimitMs: number;
   /** The latest thing the herald announced, if anything. */
   herald?: Herald;
+  /** When the gates open, in ms on the same clock as elapsedMs, if they are closed. */
+  gatesOpenAtMs?: number;
   /** A line describing the match: sandbox, difficulty, arena. */
   meta?: string;
   /** Rows this component may use. Defaults to the whole terminal. */
@@ -83,7 +85,7 @@ function HeraldLine({ herald, elapsedMs }: { herald?: Herald; elapsedMs: number 
   );
 }
 
-export function Arena({ left, right, elapsedMs, timeLimitMs, herald, meta, rows }: Props) {
+export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAtMs, meta, rows }: Props) {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 100;
   const available = rows ?? stdout?.rows ?? 30;
@@ -110,6 +112,9 @@ export function Arena({ left, right, elapsedMs, timeLimitMs, herald, meta, rows 
           {(elapsedMs / 1000).toFixed(1)}s
         </Text>
         <Text color={theme.dim}>{`  ·  ${remaining.toFixed(0)}s left`}</Text>
+        {gatesOpenAtMs !== undefined && gatesOpenAtMs > elapsedMs ? (
+          <Text color={theme.white} bold>{`   ·   ⊓ GATES OPEN IN ${Math.ceil((gatesOpenAtMs - elapsedMs) / 1000)}s`}</Text>
+        ) : null}
       </Box>
 
       <HeraldLine herald={herald} elapsedMs={elapsedMs} />

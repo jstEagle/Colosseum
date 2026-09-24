@@ -3,6 +3,7 @@ import { MARK, rule } from '../ascii.js';
 import { theme } from '../theme.js';
 import type { AgentStatus, FeedEntry } from '../protocol.js';
 import type { SideStats } from '../referee.js';
+import { intentOf } from '../intent.js';
 
 interface Props {
   side: 'left' | 'right';
@@ -122,6 +123,9 @@ function tally(subtitle: string, stats?: SideStats): string {
   const parts = [`${stats.commands} cmd`];
   if (stats.decoyHits) parts.push(`${stats.decoyHits} wrong`);
   if (stats.refused) parts.push(`${stats.refused} refused`);
+  if (stats.feints) parts.push(`${stats.feints} feint${stats.feints > 1 ? 's' : ''}`);
+  if (stats.fooled) parts.push(`fooled ${stats.fooled}`);
+  if (stats.disguises) parts.push('disguised');
   const tokens = stats.inputTokens + stats.outputTokens;
   if (tokens) parts.push(`${kilo(tokens)} tok`);
   return `${subtitle}  ·  ${parts.join(' · ')}`;
@@ -131,8 +135,9 @@ export function GladiatorPane({ side, title, subtitle, color, status, feed, stat
   // Borders take 2 columns, padding another 2, and the gutter 2 more.
   const inner = Math.max(8, width - 4);
   const bodyWidth = Math.max(4, inner - 2);
-  // Rows go to: header, subtitle, rule, and the two borders.
-  const bodyHeight = Math.max(1, height - 5);
+  // Rows go to: header, subtitle, doing, thinks, rule, and the two borders.
+  const bodyHeight = Math.max(1, height - 7);
+  const intent = intentOf(feed, status);
 
   const rows = layout(feed, bodyWidth, bodyHeight + 20).slice(-bodyHeight);
   const label = STATUS_LABEL[status];
@@ -158,6 +163,22 @@ export function GladiatorPane({ side, title, subtitle, color, status, feed, stat
       <Text color={theme.dim} wrap="truncate-end">
         {tally(subtitle, stats)}
       </Text>
+      <Box width={inner}>
+        <Box width={8} flexShrink={0}>
+          <Text color={theme.dim}>{'doing'}</Text>
+        </Box>
+        <Text color={status === 'stunned' ? theme.white : theme.bright} bold wrap="truncate-end">
+          {intent.doing}
+        </Text>
+      </Box>
+      <Box width={inner}>
+        <Box width={8} flexShrink={0}>
+          <Text color={theme.dim}>{'thinks'}</Text>
+        </Box>
+        <Text color={theme.muted} italic wrap="truncate-start">
+          {intent.thought ? `“${intent.thought}”` : '…'}
+        </Text>
+      </Box>
       <Text color={status === 'dead' || status === 'victor' || status === 'stunned' ? theme.dim : theme.charcoal}>
         {status === 'dead'
           ? rule(inner, MARK.dead)

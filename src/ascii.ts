@@ -50,6 +50,31 @@ export const NUMERALS: Record<string, string> = {
   '1': ['  ██  ', ' ███  ', '  ██  ', '  ██  ', ' ████ '].join('\n'),
 };
 
+/** A three-row block alphabet, just the letters the verdicts need. */
+const BLOCK: Record<string, string[]> = {
+  A: ['▄▀▄', '█▀█', '█ █'],
+  D: ['█▀▄', '█ █', '█▄▀'],
+  E: ['█▀▀', '█▀ ', '█▄▄'],
+  F: ['█▀▀', '█▀ ', '█  '],
+  G: ['█▀▀', '█ ▄', '█▄█'],
+  H: ['█ █', '█▀█', '█ █'],
+  I: ['█', '█', '█'],
+  L: ['█  ', '█  ', '█▄▄'],
+  N: ['█▄ █', '█ ▀█', '█  █'],
+  R: ['█▀▄', '█▀▄', '█ █'],
+  S: ['█▀▀', '▀▀█', '▄▄█'],
+  T: ['▀█▀', ' █ ', ' █ '],
+  W: ['█   █', '█ █ █', '▀▄▀▄▀'],
+  ' ': ['  ', '  ', '  '],
+};
+
+/** Set a word in the block alphabet, or null if a letter is missing. */
+export function banner(text: string): string | null {
+  const letters = text.toUpperCase().split('').map((c) => BLOCK[c]);
+  if (letters.some((l) => !l)) return null;
+  return [0, 1, 2].map((row) => letters.map((l) => l[row]).join(' ')).join('\n');
+}
+
 /** A bar that empties as the clock runs down. */
 export function timeBar(width: number, fraction: number): { spent: string; left: string } {
   const n = Math.max(0, Math.min(width, Math.round(width * (1 - fraction))));

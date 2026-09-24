@@ -68,9 +68,15 @@ class LineBuffer {
       this.buf = this.buf.slice(idx + 1);
       if (line.trim()) emitFeed(this.kind, line);
     }
-    if (this.buf.length > 160) {
-      emitFeed(this.kind, this.buf);
-      this.buf = '';
+    // Long unbroken streams are cut at a sentence end where possible, so a
+    // thought reads as a thought rather than as 160-character shards.
+    if (this.buf.length > 320) {
+      const cut = Math.max(this.buf.lastIndexOf('. ', 480), this.buf.lastIndexOf('? ', 480));
+      const at = cut > 120 ? cut + 1 : this.buf.length > 480 ? 480 : -1;
+      if (at > 0) {
+        emitFeed(this.kind, this.buf.slice(0, at).trim());
+        this.buf = this.buf.slice(at).trimStart();
+      }
     }
   }
   flush() {
@@ -90,6 +96,7 @@ let execSeq = 0;
 // IPC channel, and so this process, alive once the agent has finished.
 process.on('message', (msg: RefereeMessage) => {
   if (msg?.type === 'brief') briefed(msg);
+  else if (msg?.type === 'disguise') process.title = msg.name;
   else if (msg?.type === 'exec-result') {
     pendingExec.get(msg.id)?.({ code: msg.code, output: msg.output });
     pendingExec.delete(msg.id);

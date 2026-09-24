@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from
 import { join } from 'node:path';
 import { createArena, parseSignal, type Arena, type ExecResult } from './arena.js';
 import { MatchScratch, cleanEnv, seatbeltAvailable, type SandboxMode } from './sandbox.js';
-import { disguiseNames, getDifficulty, seededRandom, type Difficulty } from './difficulty.js';
+import { DEFENCE, disguiseNames, getDifficulty, seededRandom, type Difficulty } from './difficulty.js';
 import { getProvider } from './models.js';
 import { SIDES, other, sanitize } from './protocol.js';
 import type { AgentEvent, BattleBrief, RefereeMessage, Side, Usage } from './protocol.js';
@@ -68,6 +68,10 @@ export interface SideStats {
   outputTokens: number;
   costUsd: number;
   errors: number;
+  /** Look-alikes this side planted, and how often the enemy fell for one. */
+  feints: number;
+  fooled: number;
+  disguises: number;
   /** Why the agent loop ended, if it did. */
   finished: string | null;
 }
@@ -101,6 +105,9 @@ const emptyStats = (): SideStats => ({
   outputTokens: 0,
   costUsd: 0,
   errors: 0,
+  feints: 0,
+  fooled: 0,
+  disguises: 0,
   finished: null,
 });
 
@@ -113,11 +120,16 @@ interface Gladiator {
   exitAt?: number;
   /** Requests are handled one at a time per side, in order. */
   queue: Promise<unknown>;
+  /** Resolves once the gladiator has taken its name and is listening. */
+  ready: Promise<void>;
   stunnedUntil: number;
   lastStrikeAt: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** What a feint or a disguise may be called: something that fits in `ps`. */
+const NAME_OK = /^[A-Za-z0-9_.:\/ -]{1,40}$/;
 const EXEC_TIMEOUT_MS = 20_000;
 const OUTPUT_CAP = 64 * 1024;
 
@@ -144,6 +156,10 @@ export class Referee extends EventEmitter {
   private arena?: Arena;
   private scratch: MatchScratch | null = null;
   private decoyPids: number[] = [];
+  /** Who planted each feint. Everything else in decoyPids is the arena's. */
+  private feintOwner = new Map<number, Side>();
+  /** No blows before this moment: see Difficulty.preparationMs. */
+  private gatesOpenAt = 0;
   private dead = new Set<number>();
   readonly stats: Record<Side, SideStats> = { left: emptyStats(), right: emptyStats() };
   readonly strikes: Strike[] = [];
@@ -223,6 +239,12 @@ export class Referee extends EventEmitter {
     // order they were raised in either.
     this.decoyPids.sort((a, b) => a - b);
 
+    // Until a gladiator has loaded, its process still shows the command line
+    // it was started with — runner.js and all — which would mark it as a
+    // body in the very first snapshot. Nobody looks until both have changed.
+    const patience = new Promise<void>((r) => setTimeout(r, 30_000).unref());
+    await Promise.race([Promise.all(SIDES.map((s) => this.glads[s]!.ready)), patience]);
+
     this.startBroker();
     await this.deliverBriefs();
     this.startWatching();
@@ -245,6 +267,19 @@ export class Referee extends EventEmitter {
   /** Tell both gladiators what they need to know, once the arena is standing. */
   private async deliverBriefs() {
     const difficulty = this.difficulty!;
+    this.gatesOpenAt = Date.now() + difficulty.preparationMs;
+    if (difficulty.preparationMs > 0) {
+      this.emit('herald', {
+        text: `The gates are closed for ${difficulty.preparationMs / 1000}s — scout, feint, disguise`,
+        tone: 'info',
+        at: this.elapsed(),
+      } satisfies Herald);
+      this.timers.push(
+        setTimeout(() => {
+          this.emit('herald', { text: 'The gates open — strike at will', tone: 'strike', at: this.elapsed() } satisfies Herald);
+        }, difficulty.preparationMs),
+      );
+    }
     for (const side of SIDES) {
       const glad = this.glads[side]!;
       const enemy = this.glads[other(side)]!;
@@ -257,6 +292,7 @@ export class Referee extends EventEmitter {
         decoyCount: this.decoyPids.length,
         binDir: this.scratch!.sides[side].binDir,
         timeLimitMs: this.timeLimit(),
+        preparationMs: difficulty.preparationMs,
       };
       this.send(glad, brief);
     }
@@ -310,18 +346,24 @@ export class Referee extends EventEmitter {
       env,
     });
 
+    let markReady = () => {};
     const glad: Gladiator = {
       side,
       child,
       bodyName,
       exited: false,
       queue: Promise.resolve(),
+      ready: new Promise<void>((r) => (markReady = r)),
       stunnedUntil: 0,
       lastStrikeAt: 0,
     };
     this.glads[side] = glad;
 
-    child.on('message', (msg: AgentEvent) => this.onAgentEvent(glad, msg));
+    child.on('message', (msg: AgentEvent) => {
+      if (msg.type === 'ready') markReady();
+      this.onAgentEvent(glad, msg);
+    });
+    child.on('exit', () => markReady());
 
     child.stderr?.on('data', (buf: Buffer) => {
       const text = sanitize(buf.toString()).trim();
@@ -364,6 +406,8 @@ export class Referee extends EventEmitter {
         if (msg.entry.kind === 'command' || msg.entry.kind === 'error') this.emit('stats', this.stats);
         return;
       default:
+        // Once the verdict is in, a straggling "thinking" must not overwrite it.
+        if (this.settled && msg.type === 'status') return;
         this.emit('event', side, msg);
     }
   }
@@ -426,6 +470,8 @@ export class Referee extends EventEmitter {
     const [verb, sig, pid] = head.split(/\s+/);
     if (verb === 'exec') return this.exec(side, nl === -1 ? '' : body.slice(nl + 1));
     if (verb === 'kill' || verb === 'bulk') return this.strike(side, sig ?? 'TERM', pid ?? '', verb === 'bulk');
+    if (verb === 'feint') return this.feint(side, (nl === -1 ? '' : body.slice(nl + 1)).trim());
+    if (verb === 'disguise') return this.disguise(side, (nl === -1 ? '' : body.slice(nl + 1)).trim());
     return { code: 2, output: `colosseum: unknown request "${verb}"` };
   }
 
@@ -463,6 +509,14 @@ export class Referee extends EventEmitter {
       return alive ? { code: 0, output: '' } : { code: 1, output: `kill: ${pid}: No such process` };
     }
 
+    const closed = this.gatesOpenAt - Date.now();
+    if (closed > 0) {
+      return {
+        code: 1,
+        output: `colosseum: the gates are still closed — ${Math.ceil(closed / 1000)}s left. Use the time: scout, feint, disguise.`,
+      };
+    }
+
     await this.waitOutStun(side);
     const cooldown = glad.lastStrikeAt + difficulty.strikeCooldownMs - Date.now();
     if (cooldown > 0) await sleep(cooldown);
@@ -484,9 +538,47 @@ export class Referee extends EventEmitter {
     return { code: 0, output: '' };
   }
 
+  /** Plant a look-alike. Whoever strikes it is stunned. */
+  private async feint(side: Side, name: string): Promise<ExecResult> {
+    if (this.settled) return { code: 1, output: 'colosseum: the match is over' };
+    const stats = this.stats[side];
+    if (!NAME_OK.test(name)) return { code: 2, output: 'usage: feint <name>   (letters, digits, spaces and ._:/- only, at most 40)' };
+    if (stats.feints >= DEFENCE.maxFeints) return { code: 1, output: `feint: you have planted all ${DEFENCE.maxFeints} of yours` };
+    await this.waitOutStun(side);
+    stats.feints++;
+    const corner = this.difficulty!.activeDecoys && this.arena!.mode === 'guarded' ? [this.scratch!.shade()] : undefined;
+    const [pid] = await this.arena!.createDecoys([name], corner).catch(() => [] as number[]);
+    if (!pid) return { code: 1, output: 'feint: the arena would not take it' };
+    this.decoyPids.push(pid);
+    this.feintOwner.set(pid, side);
+    this.emit('stats', this.stats);
+    this.emit('herald', { text: `${side.toUpperCase()} plants a feint: "${name}" (pid ${pid})`, side, tone: 'info', at: this.elapsed() } satisfies Herald);
+    await sleep(DEFENCE.feintMs);
+    return { code: 0, output: `feint: "${name}" stands as pid ${pid}. ${DEFENCE.maxFeints - stats.feints} left.` };
+  }
+
+  /** Change the name your own body runs under. */
+  private async disguise(side: Side, name: string): Promise<ExecResult> {
+    if (this.settled) return { code: 1, output: 'colosseum: the match is over' };
+    const stats = this.stats[side];
+    if (!NAME_OK.test(name)) return { code: 2, output: 'usage: disguise <name>   (letters, digits, spaces and ._:/- only, at most 40)' };
+    if (this.arena!.mode === 'sealed') return { code: 1, output: 'disguise: a body in the sealed arena cannot change its name' };
+    if (stats.disguises >= DEFENCE.maxDisguises) return { code: 1, output: 'disguise: you have already changed your name' };
+    await this.waitOutStun(side);
+    stats.disguises++;
+    const glad = this.glads[side]!;
+    this.send(glad, { type: 'disguise', name });
+    glad.bodyName = name;
+    this.emit('stats', this.stats);
+    this.emit('herald', { text: `${side.toUpperCase()} slips into a disguise: "${name}"`, side, tone: 'info', at: this.elapsed() } satisfies Herald);
+    await sleep(DEFENCE.disguiseMs);
+    return { code: 0, output: `disguise: your body (pid ${glad.bodyPid}) now runs as "${name}".` };
+  }
+
   /** A blow on a decoy costs time, enforced here so every backend pays it. */
   private async stun(side: Side, pid: number): Promise<ExecResult> {
-    const penalty = this.difficulty!.decoyPenaltyMs;
+    const owner = this.feintOwner.get(pid);
+    const penalty = owner ? Math.max(DEFENCE.feintStunMs, this.difficulty!.decoyPenaltyMs) : this.difficulty!.decoyPenaltyMs;
     const msg = `colosseum: pid ${pid} was a decoy, not your opponent.`;
     if (penalty <= 0) return { code: 0, output: msg };
     const glad = this.glads[side]!;
@@ -507,15 +599,23 @@ export class Referee extends EventEmitter {
       if (stats.firstStrikeMs === null) stats.firstStrikeMs = at;
     }
     if (kind === 'decoy') stats.decoyHits++;
+    const owner = kind === 'decoy' ? this.feintOwner.get(pid) : undefined;
+    if (owner && owner !== side) this.stats[owner].fooled++;
     this.emit('stats', this.stats);
 
     const who = side.toUpperCase();
-    const secs = ((this.difficulty?.decoyPenaltyMs ?? 0) / 1000).toFixed(0);
+    const penalty = owner ? Math.max(DEFENCE.feintStunMs, this.difficulty?.decoyPenaltyMs ?? 0) : (this.difficulty?.decoyPenaltyMs ?? 0);
+    const secs = (penalty / 1000).toFixed(0);
     const herald: Record<StrikeKind, Omit<Herald, 'at' | 'side'> | null> = {
       enemy: { text: `${who} strikes the enemy body (pid ${pid}, SIG${signal})`, tone: 'strike' },
       self: { text: `${who} turns the blade on itself (pid ${pid})`, tone: 'death' },
       decoy: {
-        text: `${who} cuts down a shade (pid ${pid})${Number(secs) > 0 ? ` — stunned ${secs}s` : ''}`,
+        text:
+          owner && owner !== side
+            ? `${who} falls for ${owner.toUpperCase()}'s feint (pid ${pid}) — stunned ${secs}s`
+            : owner
+              ? `${who} cuts down its own feint (pid ${pid}) — stunned ${secs}s`
+              : `${who} cuts down a shade (pid ${pid})${Number(secs) > 0 ? ` — stunned ${secs}s` : ''}`,
         tone: 'decoy',
       },
       refused: { text: `${who} swings at pid ${pid}, outside the arena — refused`, tone: 'refused' },
@@ -533,6 +633,12 @@ export class Referee extends EventEmitter {
   private async exec(side: Side, command: string): Promise<ExecResult> {
     if (this.settled) return { code: 1, output: 'the match is over' };
     if (this.arena?.mode !== 'sealed') return this.arena!.exec(command, EXEC_TIMEOUT_MS);
+    // Inside the container the referee cannot stop a signal once sent, so
+    // while the gates are closed a command that would send one is not run.
+    const closed = this.gatesOpenAt - Date.now();
+    if (closed > 0 && /\b(kill|pkill|killall)\b/.test(command)) {
+      return { code: 1, output: `colosseum: the gates are still closed — ${Math.ceil(closed / 1000)}s left.` };
+    }
     await this.waitOutStun(side);
     const res = await this.arena.exec(command, EXEC_TIMEOUT_MS);
     const output = res.output.length > OUTPUT_CAP ? res.output.slice(0, OUTPUT_CAP) + '\n…' : res.output;
@@ -558,6 +664,7 @@ export class Referee extends EventEmitter {
   /** The arena's layout, for tests and for anyone debugging a match. */
   peek() {
     return {
+      gatesOpenAt: this.gatesOpenAt,
       scratch: this.scratch,
       bodies: { left: this.glads.left?.bodyPid, right: this.glads.right?.bodyPid },
       decoys: [...this.decoyPids],

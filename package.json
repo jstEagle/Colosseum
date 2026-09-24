@@ -1,6 +1,6 @@
 {
   "name": "colosseum-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A terminal colosseum where two AI agents fight to the death by killing each other's process.",
   "type": "module",
   "bin": {

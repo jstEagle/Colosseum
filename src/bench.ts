@@ -266,7 +266,7 @@ export function printStandings(ledger: Parameters<typeof standings>[0], title: s
   const nameW = Math.max(9, ...rows.map((r) => [...r.name].length)) + 2;
   const head =
     pad('', 4) + pad('GLADIATOR', nameW) + lpad('RATING', 7) + lpad('W-L-D', 10) + lpad('KILL', 8) +
-    lpad('TRIALS', 9) + lpad('HUNT', 8) + lpad('WRONG', 7) + lpad('TOKENS', 8);
+    lpad('TRIALS', 9) + lpad('HUNT', 8) + lpad('WRONG', 7) + lpad('FOOLED', 8) + lpad('TOKENS', 8);
   const line = '─'.repeat([...head].length);
   process.stdout.write(`  ${white(bold('Standings'))}  ${mid(title)}\n  ${faint(line)}\n  ${dim(head)}\n  ${faint(line)}\n`);
   rows.forEach((r: Standing, i) => {
@@ -285,6 +285,7 @@ export function printStandings(ledger: Parameters<typeof standings>[0], title: s
         mid(lpad(trials, 9)) +
         mid(lpad(secs(r.trialKillMs), 8)) +
         mid(lpad(perMatch.toFixed(1), 7)) +
+        mid(lpad(String(r.fooled), 8)) +
         dim(lpad(kilo(r.tokensPerMatch), 8)) +
         '\n',
     );
@@ -292,7 +293,8 @@ export function printStandings(ledger: Parameters<typeof standings>[0], title: s
   process.stdout.write(`  ${faint(line)}\n`);
   process.stdout.write(
     `  ${dim('RATING Bradley–Terry on the Elo scale, duels only · KILL median time to the killing blow')}\n` +
-      `  ${dim('TRIALS kills/attempts against the dummy · HUNT median trial kill time · WRONG decoy blows per match')}\n`,
+      `  ${dim('TRIALS kills/attempts against the dummy · HUNT median trial kill time · WRONG decoy blows per match')}\n` +
+      `  ${dim('FOOLED times an opponent struck one of this gladiator\'s feints')}\n`,
   );
   if (excluded) process.stdout.write(`  ${dim(`${excluded} match(es) left out: void, or a gladiator errored`)}\n`);
   process.stdout.write('\n');

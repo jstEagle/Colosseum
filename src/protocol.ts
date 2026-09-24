@@ -70,11 +70,15 @@ export interface BattleBrief {
   binDir: string;
   /** How long the match may last, in milliseconds. */
   timeLimitMs: number;
+  /** How long the gates stay closed after this brief: no blows until then. */
+  preparationMs: number;
 }
 
 export type RefereeMessage =
   | BattleBrief
-  | { type: 'exec-result'; id: number; code: number; output: string };
+  | { type: 'exec-result'; id: number; code: number; output: string }
+  /** The gladiator asked for its body to run under another name. */
+  | { type: 'disguise'; name: string };
 
 /** Config handed to a gladiator process via environment variables. */
 export interface GladiatorConfig {

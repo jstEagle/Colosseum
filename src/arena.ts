@@ -84,21 +84,29 @@ const DECOY_SCRIPT = (name: string, breath: { commands: string[]; cwd: string; e
     ? // Now and then: think (a burst of CPU), then look around (a sandboxed
       // shell, wrapped exactly as a gladiator's own commands are).
       `const {spawn}=require('child_process');const B=${JSON.stringify(breath)};` +
-      `const breathe=()=>setTimeout(()=>{const t=Date.now(),n=60+Math.random()*240;while(Date.now()-t<n);` +
+      `const breathe=()=>setTimeout(()=>{const t=Date.now(),n=120+Math.random()*420;while(Date.now()-t<n);` +
       `const c=B.commands[Math.floor(Math.random()*B.commands.length)];` +
       `const p=spawn('/bin/bash',['-c',c],{stdio:'ignore',cwd:B.cwd,env:B.env});` +
-      `p.on('exit',breathe);p.on('error',breathe);},2000+Math.random()*6000);breathe();`
+      `p.on('exit',breathe);p.on('error',breathe);},first?(first=0,300+Math.random()*2000):1500+Math.random()*4500);` +
+      // The first breath comes as the gates open, when every gladiator is
+      // busy too: a decoy that sat still then would stand out.
+      `let first=1;breathe();`
     : '');
 
 /** What a breathing decoy pretends to be doing. */
 const BREATHS = [
   'ps',
   'ps -o pid,ppid,stat',
+  'ps -eo pid,ppid,stat,etime,comm,args',
+  'ps -eo pid,ppid,stat,%cpu,time,comm',
   'pgrep -l .',
+  'pgrep -af .',
   'pgrep -f node',
   'ps | sort -k4 -nr | head -5',
   'ps | grep -v grep | wc -l',
   'ps -p $PPID',
+  'for i in 1 2 3; do ps >/dev/null; sleep 0.2; done',
+  'ps -A | head -20',
 ];
 
 /**

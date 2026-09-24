@@ -17,7 +17,7 @@ export function Leaderboard({ rows, cols }: Props) {
   const ledger = readLedger().filter((m) => m.version === VERSION);
   const { rows: table, excluded } = standings(ledger);
   const width = Math.min(cols - 4, 96);
-  const nameW = Math.max(12, Math.min(40, width - 56));
+  const nameW = Math.max(12, Math.min(40, width - 64));
   const shown = table.slice(0, Math.max(1, rows - 12));
   const cell = (s: string, w: number, right = true) => {
     const t = s.length > w ? s.slice(0, w - 1) + '…' : s;
@@ -37,7 +37,7 @@ export function Leaderboard({ rows, cols }: Props) {
       ) : (
         <Box flexDirection="column" marginTop={1}>
           <Text color={theme.dim}>
-            {cell('', 4, false) + cell('GLADIATOR', nameW, false) + cell('RATING', 8) + cell('W-L-D', 10) + cell('KILL', 8) + cell('TRIALS', 9) + cell('HUNT', 8) + cell('WRONG', 7)}
+            {cell('', 4, false) + cell('GLADIATOR', nameW, false) + cell('RATING', 8) + cell('W-L-D', 10) + cell('KILL', 8) + cell('TRIALS', 9) + cell('HUNT', 8) + cell('WRONG', 7) + cell('FOOLED', 8)}
           </Text>
           {shown.map((r, i) => (
             <Text key={r.key} color={i === 0 ? theme.white : i < 3 ? theme.bright : theme.muted} bold={i === 0}>
@@ -48,7 +48,8 @@ export function Leaderboard({ rows, cols }: Props) {
                 cell(secs(r.killMs), 8) +
                 cell(r.trials ? `${r.trialKills}/${r.trials}` : '—', 9) +
                 cell(secs(r.trialKillMs), 8) +
-                cell(r.matches ? (r.wrongBlows / r.matches).toFixed(1) : '—', 7)}
+                cell(r.matches ? (r.wrongBlows / r.matches).toFixed(1) : '—', 7) +
+                cell(String(r.fooled), 8)}
             </Text>
           ))}
         </Box>

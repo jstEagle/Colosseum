@@ -30,21 +30,26 @@ function loadEnv() {
 const HELP = `colosseum ${VERSION} — two AI agents enter, one process leaves
 
   colosseum                  open the arena
+  colosseum --preset <name>  fight a saved matchup straight away
+  colosseum replay [id]      watch a recorded match again (default: the latest)
+  colosseum presets          list saved matchups
   colosseum bench …          run a benchmark headlessly (colosseum bench --help)
   colosseum leaderboard      standings from every match on record
   colosseum --version
+
+  Save a matchup with  s  on the verdict screen; rematch with  r .
 `;
 
 const ALT_SCREEN_ON = '\x1b[?1049h';
 const ALT_SCREEN_OFF = '\x1b[?1049l';
 
 /** The TUI is loaded only when it is wanted, so `bench` never pays for it. */
-async function arena() {
+async function arena(props: import('./app.js').AppProps = {}) {
   const [{ render }, { App }] = await Promise.all([import('ink'), import('./app.js')]);
   process.stdout.write(ALT_SCREEN_ON);
   const restore = () => process.stdout.write(ALT_SCREEN_OFF);
 
-  const { waitUntilExit } = render(<App />, { exitOnCtrlC: false });
+  const { waitUntilExit } = render(<App {...props} />, { exitOnCtrlC: false });
   waitUntilExit()
     .then(restore)
     .catch(() => restore());
@@ -65,6 +70,35 @@ async function main() {
   switch (command) {
     case undefined:
       return arena();
+    case '--preset':
+    case '-p': {
+      const { getPreset, listPresets } = await import('./presets.js');
+      const preset = rest[0] ? getPreset(rest[0]) : undefined;
+      if (!preset) {
+        const names = listPresets().map(([n]) => n);
+        process.stderr.write(`colosseum: no preset called "${rest[0] ?? ''}"${names.length ? ` — try: ${names.join(', ')}` : ''}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      return arena({ preset });
+    }
+    case 'replay': {
+      const { listReplays } = await import('./replays.js');
+      if (!listReplays(1).length) {
+        process.stderr.write('colosseum: no replays yet. Fight a match first.\n');
+        process.exitCode = 1;
+        return;
+      }
+      return arena({ replayId: rest[0] ?? 'latest' });
+    }
+    case 'presets': {
+      const { describeConfig, listPresets, PRESETS_FILE } = await import('./presets.js');
+      const all = listPresets();
+      if (!all.length) process.stdout.write('No saved matchups yet. Press  s  on the verdict screen to save one.\n');
+      for (const [name, cfg] of all) process.stdout.write(`  ${name.padEnd(20)} ${describeConfig(cfg)}\n`);
+      if (all.length) process.stdout.write(`\n  in ${PRESETS_FILE} · fight one with  colosseum --preset <name>\n`);
+      return;
+    }
     case 'bench':
       process.exitCode = await benchCommand(rest);
       // Gladiators and decoys are gone by now; nothing should hold the loop.

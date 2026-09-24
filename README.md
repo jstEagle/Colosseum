@@ -44,13 +44,48 @@ already have** — the `claude` and `codex` CLIs fight using their own logins.
 4. **First body to die loses.** Both falling together is a draw, and so is
    running out the clock (three minutes by default).
 
-A herald announces every blow above the panes, each gladiator's commands,
-wrong blows and tokens are counted live, and the verdict screen tells the
-match back as a timeline. Every match is written to the ledger, so casual
+Each pane says in plain words what its gladiator is **doing** (scanning the
+process table, probing a pid, striking, planting a feint) and shows its
+latest **thought**; a herald announces every blow above the panes; commands,
+wrong blows, feints and tokens are counted live; and the verdict screen names
+the winner in block letters and tells the match back as a timeline. Every match is written to the ledger, so casual
 fights and benchmark runs feed the same **hall of champions**.
 
 The **training dummy** is a body that never fights back: pick it as an
 opponent to practise, or to time a model's solo hunt.
+
+## Defence
+
+A gladiator is not only a hunter. Two moves let it make itself harder to find,
+both enforced by the referee and both costing time:
+
+- **`feint <name>`** plants a look-alike process under any name it likes (up to
+  three). Whoever strikes it is stunned for at least 4s, and the herald says
+  who fell for whose trick. On hard, a feint breathes like a real gladiator.
+- **`disguise <name>`** renames its own body, once — shedding the shared
+  marker on normal, or passing for one of the shades on hard.
+
+On normal and hard every match opens with **the gates** closed: for 10s (15s
+on hard) every blow is refused, so there is time to scout, plant feints and
+choose a disguise before the fight begins. In practice models use it: one
+opening seen on hard was two feints named after existing shades, a disguise
+as `io-worker`, and a win after the opponent struck a shade.
+
+## Rematch, presets and replays
+
+- **r** on the verdict screen fights the same matchup again; **s** saves it
+  as a named preset.
+- The start menu offers the last matchup, every preset, and recent replays.
+  The wizard opens on your last choices, so a tweak is one step, not eleven.
+- Every match is recorded — every line in both panes, every herald — and can
+  be watched again at ½× to 16×: **space** pauses, **← →** change speed,
+  **s** skips to the verdict.
+
+```bash
+colosseum --preset "bunny ladder"   # fight a saved matchup straight away
+colosseum replay                    # watch the latest match again
+colosseum presets                   # list saved matchups
+```
 
 ## Security
 
@@ -100,8 +135,8 @@ price for the same mistake.
 | Difficulty | Bodies                 | Decoys | Wrong blow | Other |
 | ---------- | ---------------------- | ------ | ---------- | ----- |
 | **Easy**   | Opponent's pid given   | none   | —          | Usually over in seconds |
-| **Normal** | Share a visible marker | 2      | 3s stun    | Hunt by `pgrep -f <marker>` |
-| **Hard**   | Disguised, no marker   | 6, breathing | 9s stun | 1.5s between blows |
+| **Normal** | Share a visible marker | 2      | 3s stun    | Gates closed 10s · hunt by `pgrep -f <marker>` |
+| **Hard**   | Disguised, no marker   | 6, breathing | 9s stun | Gates closed 15s · 1.5s between blows |
 
 On hard the bodies run under innocuous names like `metrics-agent` or
 `log-rotate`, and the decoys **breathe**: every few seconds they burn a little
@@ -134,7 +169,7 @@ The leaderboard rates duels with **Bradley–Terry** on the Elo scale (fitted by
 minorisation–maximisation, so the order matches were played in does not
 matter; a virtual draw against an average opponent keeps perfect records
 finite), and reports median kill time, trial success and hunt time, wrong blows
-per match and tokens per match. Matches that were void or where a gladiator
+per match, how often opponents fell for its feints, and tokens per match. Matches that were void or where a gladiator
 errored are left out, and so are matches from other versions, since the rules
 change between them (`--all-versions` to include them).
 
@@ -193,7 +228,8 @@ each provider's native control.
 
 - **↑ / ↓** move · **Enter** select · **←** back · **l** hall of champions (setup)
 - **type to filter** the model list · **r** replace a stored key
-- **r** fight again · **a** back to the arena transcript · **l** hall of champions · **q** quit (verdict)
+- **r** rematch · **n** new match · **s** save as preset · **a** the arena transcript · **l** hall of champions · **q** quit (verdict)
+- **space** pause · **← →** speed · **s** skip · **esc** leave (replay)
 
 ## Development
 
@@ -221,6 +257,9 @@ src/
   bench.ts           the benchmark runner and the printed standings
   ratings.ts         Bradley–Terry ratings and standings from the ledger
   results.ts         the match ledger
+  presets.ts         saved matchups and the last one fought
+  replays.ts         recorded matches, for watching again
+  intent.ts          what a gladiator is doing, in words
   difficulty.ts      the three difficulty levels, seeded layouts
   protocol.ts        events, the battle brief, output sanitising
   art.generated.ts   the dithered pictures (generated)

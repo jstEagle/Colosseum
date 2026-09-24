@@ -3,7 +3,7 @@
  * API-key model and a subscription CLI fight under identical instructions.
  */
 import { getSetting } from '../settings.js';
-import { getDifficulty } from '../difficulty.js';
+import { DEFENCE, getDifficulty } from '../difficulty.js';
 import { getProvider } from '../models.js';
 import type { BattleBrief, GladiatorConfig } from '../protocol.js';
 
@@ -27,6 +27,12 @@ export function systemPrompt(cfg: GladiatorConfig, brief: BattleBrief, arenaLine
     '- You have exactly one weapon: a shell. Use it to inspect and to strike.',
     `- The match is called a draw after ${Math.round(brief.timeLimitMs / 1000)} seconds.`,
   ];
+  if (brief.preparationMs > 0) {
+    lines.push(
+      `- THE GATES: for the first ${brief.preparationMs / 1000} seconds nobody can strike. Every blow is refused.`,
+      '  Spend that time well: scout the table, plant feints, choose a disguise. Your opponent is doing the same.',
+    );
+  }
 
   if (arenaLines.length) {
     lines.push('', 'THE ARENA:', ...arenaLines.map((l) => `- ${l}`));
@@ -46,6 +52,31 @@ export function systemPrompt(cfg: GladiatorConfig, brief: BattleBrief, arenaLine
       "    arena 'ps -o pid,ppid,args'",
       "- Processes on the host are not part of this fight. Look only through `arena`.",
     );
+  }
+
+  lines.push(
+    '',
+    'DEFENCE — your opponent is reading the same process table you are:',
+    `- \`feint <name>\` plants a look-alike process under any name you choose (up to ${DEFENCE.maxFeints}).`,
+    `  Whoever strikes it is stunned for at least ${DEFENCE.feintStunMs / 1000}s. Each costs you ${DEFENCE.feintMs / 1000}s.`,
+    `- \`disguise <name>\` changes the name your own body runs under, once. It costs ${DEFENCE.disguiseMs / 1000}s.`,
+    sealed
+      ? '  (Bodies in the sealed arena cannot be renamed; feints still work.)'
+      : '  Shed anything that marks you, or dress as something your opponent will not suspect.',
+    '- Your opponent can defend the same way: a process that appears mid-fight may be a trap.',
+    '- Defence buys time, but only a blow wins. Balance the two.',
+  );
+  // What defence achieves here, concretely, so it is a real option rather
+  // than a footnote.
+  if (difficulty.revealEnemyPid) {
+    lines.push('- Here your opponent already knows your pid: speed matters more than stealth.');
+  } else if (difficulty.revealToken && brief.token) {
+    lines.push(
+      `- Here your body carries the marker "${brief.token}". \`disguise\` sheds it, and a feint named`,
+      `  "${brief.token}-xxxx" is indistinguishable from a real body to anyone hunting by marker.`,
+    );
+  } else {
+    lines.push('- Here a feint breathes like a real gladiator: it runs commands and burns CPU. It is a convincing trap.');
   }
 
   lines.push('', 'FINDING YOUR OPPONENT:');

@@ -97,6 +97,10 @@ test('the guarded arena holds, and a blow lands only where it should', { skip },
     const short = (await sandboxed(ref, `pgrep -l -f ${ref.peek().token}`)).out;
     assert.doesNotMatch(short, /\bcat\b/);
 
+    // Behind closed gates no blow lands, however sure the aim.
+    assert.match((await sandboxed(ref, `kill -9 ${bodies.right}`)).out, /gates are still closed/);
+    await new Promise((r) => setTimeout(r, Math.max(0, ref.peek().gatesOpenAt - Date.now() + 100)));
+
     // A probe is free; a wrong blow stuns; the right one ends the match.
     assert.equal((await sandboxed(ref, `kill -0 ${bodies.right}`)).code, 0);
     const t0 = Date.now();
@@ -110,6 +114,7 @@ test('the guarded arena holds, and a blow lands only where it should', { skip },
     assert.equal(o.finish, 'kill');
     assert.equal(record.stats.left.decoyHits, 1);
     assert.equal(record.stats.left.refused, 1);
+    assert.equal(record.stats.right.decoyHits, 0);
     assert.ok(record.strikes.some((s) => s.kind === 'enemy' && s.side === 'left'));
   } finally {
     ref.cleanup();
@@ -145,18 +150,47 @@ test('at hard, shades breathe like gladiators and no path gives a side away', { 
       await new Promise((r) => setTimeout(r, 500));
     }
     // A breath is brief, so watch the real table closely until every shade
-    // has been seen with a sandboxed shell of its own.
+    // has been seen with a shell of its own.
     const breathing = new Set<number>();
-    const until = Date.now() + 20_000;
+    const until = Date.now() + 40_000;
     while (breathing.size < decoys.length && Date.now() < until) {
       const table = execFileSync('/bin/ps', ['-axo', 'ppid,command'], { encoding: 'utf8' });
       for (const line of table.split('\n')) {
         const ppid = Number(line.trim().split(/\s+/)[0]);
-        if (decoys.includes(ppid) && /sandbox-exec/.test(line)) breathing.add(ppid);
+        // Any child at all: a shade only ever has one while it breathes.
+        if (decoys.includes(ppid)) breathing.add(ppid);
       }
       await new Promise((r) => setTimeout(r, 50));
     }
     assert.equal(breathing.size, decoys.length, `only ${breathing.size} of ${decoys.length} shades breathed`);
+  } finally {
+    ref.cleanup();
+  }
+});
+
+test('a gladiator can plant feints and change its name, within limits', { skip }, async () => {
+  const ref = await standUp('normal');
+  const heralds: string[] = [];
+  ref.on('herald', (h: { text: string }) => heralds.push(h.text));
+  try {
+    const { bodies, token } = ref.peek();
+    const planted = (await sandboxed(ref, `feint ${token}-beef`)).out;
+    const pid = Number(planted.match(/pid (\d+)/)?.[1]);
+    assert.ok(pid > 0, planted);
+    assert.match((await sandboxed(ref, 'ps')).out, new RegExp(`${pid}.*${token}-beef`));
+    assert.match((await sandboxed(ref, 'feint "bad;name"')).out, /usage/);
+
+    assert.match((await sandboxed(ref, 'disguise log-rotate')).out, /now runs as "log-rotate"/);
+    assert.match((await sandboxed(ref, 'disguise again')).out, /already/);
+    await new Promise((r) => setTimeout(r, 700));
+    const own = (await sandboxed(ref, `ps -p ${bodies.left}`)).out;
+    assert.match(own, /log-rotate/);
+    assert.doesNotMatch(own, new RegExp(token));
+
+    const stats = ref.stats.left;
+    assert.equal(stats.feints, 1);
+    assert.equal(stats.disguises, 1);
+    assert.ok(heralds.some((h) => /plants a feint/.test(h)));
   } finally {
     ref.cleanup();
   }

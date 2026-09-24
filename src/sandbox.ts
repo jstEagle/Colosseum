@@ -334,6 +334,18 @@ exit $found
 `;
 }
 
+/** Defence: plant a look-alike, or change your own body's name. */
+function defenceShim(rpcDir: string, verb: 'feint' | 'disguise'): string {
+  return `#!/bin/sh
+# Colosseum ${verb}. ${verb === 'feint' ? 'Plants a look-alike process under a name you choose; whoever strikes it is stunned.' : 'Changes the name your own body runs under, once per match.'}
+${rpcFunction(rpcDir)}
+name="$*"
+[ -z "$name" ] && { echo "usage: ${verb} <name>" >&2; exit 2; }
+rpc "${verb}
+$name"
+`;
+}
+
 /** Runs a command inside the sealed container, by way of the referee. */
 function arenaShim(rpcDir: string): string {
   return `#!/bin/sh
@@ -398,6 +410,8 @@ export class SideScratch {
     exe('killall', pkillShim(this.binDir, true));
     exe('ps', psShim(snapshot));
     exe('arena', arenaShim(this.rpcDir));
+    exe('feint', defenceShim(this.rpcDir, 'feint'));
+    exe('disguise', defenceShim(this.rpcDir, 'disguise'));
 
     // A shell builtin wins over PATH, so the guard disables `kill` first.
     // bash reads BASH_ENV; zsh reads $ZDOTDIR/.zshenv.

@@ -51,6 +51,8 @@ export interface Standing {
   /** Median time to the killing blow, over this model's kills. */
   killMs: number | null;
   wrongBlows: number;
+  /** Times an opponent struck one of this gladiator's feints. */
+  fooled: number;
   trials: number;
   trialKills: number;
   trialKillMs: number | null;
@@ -118,6 +120,7 @@ export function standings(ledger: LedgerEntry[]): { rows: Standing[]; excluded: 
         draws: 0,
         killMs: null,
         wrongBlows: 0,
+        fooled: 0,
         trials: 0,
         trialKills: 0,
         trialKillMs: null,
@@ -141,6 +144,7 @@ export function standings(ledger: LedgerEntry[]): { rows: Standing[]; excluded: 
       const st = m.stats[side];
       r.matches++;
       r.wrongBlows += st.decoyHits;
+      r.fooled += st.fooled ?? 0;
       r.costUsd += st.costUsd;
       tokens.set(key, (tokens.get(key) ?? 0) + st.inputTokens + st.outputTokens);
       const won = m.outcome.kind === 'winner' && m.outcome.winner === side;
