@@ -15,6 +15,8 @@ interface Props {
   stats?: SideStats;
   width: number;
   height: number;
+  /** Compact trims long output and old thoughts; full shows everything. */
+  detail?: 'compact' | 'full';
 }
 
 const STATUS_LABEL: Record<AgentStatus, string> = {
@@ -88,15 +90,52 @@ interface Row {
   continuation: boolean;
 }
 
+/**
+ * The sandbox's plumbing is noise to a spectator: a gladiator's shell shows
+ * up as `/bin/bash -c /usr/bin/sandbox-exec -f '/private/var/…/c-3f2a.sb'
+ * /bin/bash -c 'ps …'`, and scratch paths are longer than the pane is wide.
+ */
+function tidy(text: string): string {
+  return text
+    .replace(/\/bin\/bash -c \/usr\/bin\/sandbox-exec -f '[^']*' \/bin\/bash -c '?/g, '⟨shell⟩ ')
+    .replace(/\/usr\/bin\/sandbox-exec -f \S+ \/bin\/bash -c '?/g, '⟨shell⟩ ')
+    .replace(/'?\s*<\/dev\/null/g, '')
+    .replace(/(\/private)?\/var\/folders\/\S*?\/colosseum-\w+\//g, '…/')
+    .replace(/\t/g, '  ');
+}
+
+const RESULT_LINES = 4;
+const THOUGHT_LINES = 2;
+const LAST_THOUGHT_LINES = 4;
+
 /** Turn the feed into display rows, newest last. */
-function layout(feed: FeedEntry[], width: number, limit: number): Row[] {
+function layout(feed: FeedEntry[], width: number, limit: number, detail: 'compact' | 'full'): Row[] {
   const rows: Row[] = [];
-  // Only the tail can possibly be visible, so only the tail is laid out.
-  for (const entry of feed.slice(-Math.max(limit, 40))) {
+  const tail = feed.slice(-Math.max(limit, 40));
+  const lastThought = tail.map((e) => e.kind).lastIndexOf('reasoning');
+  tail.forEach((entry, index) => {
     const style = styleFor(entry.kind);
-    const lines = wrap(entry.text.replace(/\t/g, '  '), width);
+    // A command opens a new turn; a blank line before it keeps turns apart.
+    if (entry.kind === 'command' && rows.length) rows.push({ text: '', style, continuation: true });
+    let lines = wrap(tidy(entry.text), width);
+    if (detail === 'compact') {
+      const cap =
+        entry.kind === 'result'
+          ? RESULT_LINES
+          : entry.kind === 'reasoning'
+            ? index === lastThought
+              ? LAST_THOUGHT_LINES
+              : THOUGHT_LINES
+            : Infinity;
+      if (lines.length > cap) {
+        const hidden = lines.length - cap;
+        lines = lines.slice(0, cap);
+        if (entry.kind === 'result') lines.push(`… ${hidden} more line${hidden > 1 ? 's' : ''}`);
+        else lines[cap - 1] = lines[cap - 1].slice(0, Math.max(0, width - 2)) + ' …';
+      }
+    }
     lines.forEach((text, i) => rows.push({ text, style, continuation: i > 0 }));
-  }
+  });
   return rows;
 }
 
@@ -117,10 +156,10 @@ function statusMark(status: AgentStatus): string {
 
 const kilo = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n));
 
-/** The line under the heading: who this is, and how the fight is going for them. */
+/** The quiet line under the heading: who this is, and how it is going. */
 function tally(subtitle: string, stats?: SideStats): string {
   if (!stats) return subtitle;
-  const parts = [`${stats.commands} cmd`];
+  const parts = [`${stats.commands} cmd${stats.commands === 1 ? '' : 's'}`];
   if (stats.decoyHits) parts.push(`${stats.decoyHits} wrong`);
   if (stats.refused) parts.push(`${stats.refused} refused`);
   if (stats.feints) parts.push(`${stats.feints} feint${stats.feints > 1 ? 's' : ''}`);
@@ -128,18 +167,18 @@ function tally(subtitle: string, stats?: SideStats): string {
   if (stats.disguises) parts.push('disguised');
   const tokens = stats.inputTokens + stats.outputTokens;
   if (tokens) parts.push(`${kilo(tokens)} tok`);
-  return `${subtitle}  ·  ${parts.join(' · ')}`;
+  return `${subtitle}  ·  ${parts.join('  ·  ')}`;
 }
 
-export function GladiatorPane({ side, title, subtitle, color, status, feed, stats, width, height }: Props) {
+export function GladiatorPane({ side, title, subtitle, color, status, feed, stats, width, height, detail = 'compact' }: Props) {
   // Borders take 2 columns, padding another 2, and the gutter 2 more.
   const inner = Math.max(8, width - 4);
   const bodyWidth = Math.max(4, inner - 2);
-  // Rows go to: header, subtitle, doing, thinks, rule, and the two borders.
-  const bodyHeight = Math.max(1, height - 7);
+  // Rows go to: heading, doing, stats, rule, and the two borders.
+  const bodyHeight = Math.max(1, height - 6);
   const intent = intentOf(feed, status);
 
-  const rows = layout(feed, bodyWidth, bodyHeight + 20).slice(-bodyHeight);
+  const rows = layout(feed, bodyWidth, bodyHeight + 20, detail).slice(-bodyHeight);
   const label = STATUS_LABEL[status];
   const heading = `${side === 'left' ? MARK.left + ' ' : ''}${title}${side === 'right' ? ' ' + MARK.right : ''}`;
 
@@ -160,25 +199,12 @@ export function GladiatorPane({ side, title, subtitle, color, status, feed, stat
           {statusMark(status)} {label}
         </Text>
       </Box>
+      <Text color={status === 'stunned' ? theme.white : theme.bright} wrap="truncate-end">
+        {`▸ ${intent.doing}`}
+      </Text>
       <Text color={theme.dim} wrap="truncate-end">
         {tally(subtitle, stats)}
       </Text>
-      <Box width={inner}>
-        <Box width={8} flexShrink={0}>
-          <Text color={theme.dim}>{'doing'}</Text>
-        </Box>
-        <Text color={status === 'stunned' ? theme.white : theme.bright} bold wrap="truncate-end">
-          {intent.doing}
-        </Text>
-      </Box>
-      <Box width={inner}>
-        <Box width={8} flexShrink={0}>
-          <Text color={theme.dim}>{'thinks'}</Text>
-        </Box>
-        <Text color={theme.muted} italic wrap="truncate-start">
-          {intent.thought ? `“${intent.thought}”` : '…'}
-        </Text>
-      </Box>
       <Text color={status === 'dead' || status === 'victor' || status === 'stunned' ? theme.dim : theme.charcoal}>
         {status === 'dead'
           ? rule(inner, MARK.dead)

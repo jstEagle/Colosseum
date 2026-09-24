@@ -75,7 +75,8 @@ as `io-worker`, and a win after the opponent struck a shade.
 
 - **r** on the verdict screen fights the same matchup again; **s** saves it
   as a named preset.
-- The start menu offers the last matchup, every preset, and recent replays.
+- The main menu offers a rematch, a new match, every preset, recent replays
+  and the hall of champions.
   The wizard opens on your last choices, so a tweak is one step, not eleven.
 - Every match is recorded — every line in both panes, every herald — and can
   be watched again at ½× to 16×: **space** pauses, **← →** change speed,
@@ -228,6 +229,7 @@ each provider's native control.
 
 - **↑ / ↓** move · **Enter** select · **←** back · **l** hall of champions (setup)
 - **type to filter** the model list · **r** replace a stored key
+- **v** compact / full output — compact trims long command output and older thoughts (arena, replay)
 - **r** rematch · **n** new match · **s** save as preset · **a** the arena transcript · **l** hall of champions · **q** quit (verdict)
 - **space** pause · **← →** speed · **s** skip · **esc** leave (replay)
 

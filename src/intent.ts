@@ -62,7 +62,11 @@ export function intentOf(feed: FeedEntry[], status: AgentStatus): Intent {
   else if (status === 'victor') doing = 'victorious';
   else if (status === 'idle') doing = 'has stopped fighting';
   else if (status === 'booting' || status === 'waiting') doing = 'entering the arena';
-  else if (status === 'thinking' && doing) doing = `thinking (last: ${doing})`;
+  else if (status === 'thinking') {
+    // What it is thinking about: the last complete sentence of its thought.
+    const sentences = thought.split(/(?<=[.?!])\s+/).filter((x) => x.length > 12);
+    doing = thought ? `thinking: “${(sentences[sentences.length - 1] ?? thought).slice(0, 140)}”` : 'thinking…';
+  }
   else if (!doing) doing = 'sizing up the arena';
   return { doing, thought };
 }

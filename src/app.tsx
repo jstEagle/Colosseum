@@ -76,6 +76,9 @@ export function App({ preset, replayId }: AppProps) {
   const [replaying, setReplaying] = useState(false);
   const playback = useRef<Playback | null>(null);
 
+  // How much of each gladiator's output the panes show.
+  const [detail, setDetail] = useState<'compact' | 'full'>('compact');
+
   // Naming a preset from the verdict screen.
   const [naming, setNaming] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
@@ -341,6 +344,10 @@ export function App({ preset, replayId }: AppProps) {
       exit();
       return;
     }
+    if ((phase === 'fighting' || phase === 'replay' || phase === 'review') && input === 'v') {
+      setDetail((d) => (d === 'compact' ? 'full' : 'compact'));
+      return;
+    }
     if (phase === 'result') {
       if (input === 'r' && config) {
         reset();
@@ -377,6 +384,7 @@ export function App({ preset, replayId }: AppProps) {
         onComplete={handleComplete}
         onHall={openHall}
         onReplay={startReplay}
+        onQuit={exit}
         providerHint={(id) => providerState(id).hint}
         rows={termRows}
         cols={termCols}
@@ -475,12 +483,13 @@ export function App({ preset, replayId }: AppProps) {
     );
   }
 
+  const view = `v  ${detail === 'compact' ? 'full output' : 'compact'}`;
   const meta =
     phase === 'replay'
-      ? `▶ REPLAY  ${paused ? 'paused' : `${speed}×`}   ·   space  pause   ·   ← →  speed   ·   s  skip to the end   ·   esc  leave`
+      ? `▶ REPLAY  ${paused ? 'paused' : `${speed}×`}   ·   space  pause   ·   ← →  speed   ·   s  skip   ·   ${view}   ·   esc  leave`
       : phase === 'review'
-        ? 'esc  back to the verdict'
-        : matchMeta();
+        ? `esc  back to the verdict   ·   ${view}`
+        : `${matchMeta()}   ·   ${view}   ·   q  leave`;
 
   return (
     <Box flexDirection="column">
@@ -491,6 +500,7 @@ export function App({ preset, replayId }: AppProps) {
         timeLimitMs={timeLimitMs}
         herald={heralds[heralds.length - 1]}
         gatesOpenAtMs={gatesOpenAt()}
+        detail={detail}
         meta={meta}
         rows={termRows}
       />

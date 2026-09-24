@@ -25,6 +25,7 @@ interface Props {
   gatesOpenAtMs?: number;
   /** A line describing the match: sandbox, difficulty, arena. */
   meta?: string;
+  detail?: 'compact' | 'full';
   /** Rows this component may use. Defaults to the whole terminal. */
   rows?: number;
 }
@@ -85,7 +86,7 @@ function HeraldLine({ herald, elapsedMs }: { herald?: Herald; elapsedMs: number 
   );
 }
 
-export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAtMs, meta, rows }: Props) {
+export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAtMs, meta, rows, detail = 'compact' }: Props) {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 100;
   const available = rows ?? stdout?.rows ?? 30;
@@ -96,7 +97,6 @@ export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAt
   const fraction = Math.min(1, elapsedMs / Math.max(1, timeLimitMs));
   const barWidth = Math.max(10, Math.min(cols - 40, 60));
   const bar = timeBar(barWidth, fraction);
-  const remaining = Math.max(0, (timeLimitMs - elapsedMs) / 1000);
 
   return (
     <Box flexDirection="column" width={cols}>
@@ -111,7 +111,6 @@ export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAt
         <Text color={theme.bright} bold>
           {(elapsedMs / 1000).toFixed(1)}s
         </Text>
-        <Text color={theme.dim}>{`  ·  ${remaining.toFixed(0)}s left`}</Text>
         {gatesOpenAtMs !== undefined && gatesOpenAtMs > elapsedMs ? (
           <Text color={theme.white} bold>{`   ·   ⊓ GATES OPEN IN ${Math.ceil((gatesOpenAtMs - elapsedMs) / 1000)}s`}</Text>
         ) : null}
@@ -120,9 +119,9 @@ export function Arena({ left, right, elapsedMs, timeLimitMs, herald, gatesOpenAt
       <HeraldLine herald={herald} elapsedMs={elapsedMs} />
 
       <Box>
-        <GladiatorPane side="left" {...left} width={paneWidth} height={paneHeight} />
+        <GladiatorPane side="left" {...left} width={paneWidth} height={paneHeight} detail={detail} />
         <Divider height={paneHeight} />
-        <GladiatorPane side="right" {...right} width={paneWidth} height={paneHeight} />
+        <GladiatorPane side="right" {...right} width={paneWidth} height={paneHeight} detail={detail} />
       </Box>
 
       {meta ? (

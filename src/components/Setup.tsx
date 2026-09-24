@@ -27,6 +27,8 @@ interface Props {
   onHall: () => void;
   /** Watch a recorded match again. */
   onReplay: (id: string) => void;
+  /** Leave the arena. */
+  onQuit: () => void;
   providerHint: (provider: string) => string;
   /** Terminal size, so the title plate can shrink instead of overflowing. */
   rows?: number;
@@ -38,6 +40,7 @@ const WIZARD_ROWS = 31;
 
 type StepKey =
   | 'start'
+  | 'replays'
   | 'leftProvider'
   | 'leftKey'
   | 'leftModel'
@@ -53,6 +56,7 @@ type StepKey =
 /** Canonical order. Which of these are actually shown depends on choices. */
 const ORDER: StepKey[] = [
   'start',
+  'replays',
   'leftProvider',
   'leftKey',
   'leftModel',
@@ -83,7 +87,8 @@ type Selection = Record<StepKey, string>;
 
 /** One line under each step's title: what is being chosen, and why it matters. */
 const HELP: Record<StepKey, (side: string) => string> = {
-  start: () => 'Fight the last matchup again, load a saved one, watch a replay, or set up a new match.',
+  start: () => '',
+  replays: () => 'Every match you fight is recorded. Pick one to watch it again, at any speed.',
   leftProvider: (s) => `Who powers the ${s} gladiator? An API key, a subscription you are signed in to, or the training dummy.`,
   rightProvider: (s) => `Who powers the ${s} gladiator? Pick the training dummy to watch one model hunt alone.`,
   leftKey: (s) => `The ${s} gladiator's provider needs a key. Paste it; it is checked, then stored for next time.`,
@@ -123,6 +128,7 @@ function initialSelection(): Selection {
   if (!last) {
     return {
       start: '',
+      replays: '',
       leftProvider: 'openrouter',
       leftKey: '',
       leftModel: defaultModel('openrouter'),
@@ -138,6 +144,7 @@ function initialSelection(): Selection {
   }
   return {
     start: '',
+    replays: '',
     leftProvider: last.left.provider,
     leftKey: '',
     leftModel: last.left.model,
@@ -155,14 +162,14 @@ function initialSelection(): Selection {
 const PRESET = 'preset:';
 const REPLAY = 'replay:';
 
-export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, cols = 100 }: Props) {
+export function Setup({ onComplete, onHall, onReplay, onQuit, providerHint, rows = 40, cols = 100 }: Props) {
   const [sel, setSel] = useState<Selection>(initialSelection);
   const [presets] = useState(() => listPresets());
-  const [replays] = useState(() => listReplays(5));
+  const [replays] = useState(() => listReplays(12));
   const [last] = useState(() => lastConfig());
-  const hasStart = Boolean(last || presets.length || replays.length);
-  const [stepKey, setStepKey] = useState<StepKey>(hasStart ? 'start' : 'leftProvider');
-  const [cursor, setCursor] = useState(() => (hasStart ? 0 : Math.max(0, PROVIDERS.findIndex((p) => p.id === sel.leftProvider))));
+  // The arena always opens on the main menu.
+  const [stepKey, setStepKey] = useState<StepKey>('start');
+  const [cursor, setCursor] = useState(0);
 
   // Free-text entry, shared by the key step and the custom-model prompt.
   const [text, setText] = useState('');
@@ -192,7 +199,9 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
 
   const visibleSteps = (s: Selection): StepKey[] =>
     ORDER.filter((k) => {
-      if (k === 'start') return hasStart;
+      if (k === 'start') return true;
+      // A submenu of the start menu, not a step of the wizard.
+      if (k === 'replays') return false;
       if (k === 'leftKey') return needsKeyStep(s, 'left');
       if (k === 'rightKey') return needsKeyStep(s, 'right');
       if (k === 'leftReasoning') return getProvider(s.leftProvider).supportsReasoning;
@@ -229,23 +238,32 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
   };
 
   const startOptions = (): Option[] => [
-    ...(last ? [{ value: 'rematch', label: '⟲  Rematch', hint: describeConfig(last) }] : []),
-    ...presets.map(([name, cfg]) => ({ value: PRESET + name, label: `★  ${name}`, hint: describeConfig(cfg) })),
-    { value: 'new', label: '+  New match', hint: last ? 'starts from the last matchup; change anything' : 'set up both gladiators' },
+    ...(last ? [{ value: 'rematch', label: 'Rematch', hint: describeConfig(last) }] : []),
+    { value: 'new', label: 'New match', hint: last ? 'starts from your last matchup' : 'set up two gladiators' },
+    ...presets.map(([name, cfg]) => ({ value: PRESET + name, label: `★ ${name}`, hint: describeConfig(cfg) })),
+    ...(replays.length ? [{ value: 'replays', label: 'Replays', hint: `${replays.length} recorded` }] : []),
+    { value: 'hall', label: 'Hall of champions', hint: 'the leaderboard' },
+    { value: 'quit', label: 'Leave', hint: '' },
+  ];
+
+  const replayOptions = (): Option[] => [
     ...replays.map((r) => {
       const verdict = r.outcome.kind === 'winner' ? `${r.outcome.winner.toUpperCase()} won` : 'draw';
       return {
         value: REPLAY + r.id,
-        label: `▶  Replay`,
-        hint: `${describeConfig(r.config)} · ${verdict} in ${(r.durationMs / 1000).toFixed(0)}s · ${ago(r.savedAt)}`,
+        label: ago(r.savedAt),
+        hint: `${verdict} in ${(r.durationMs / 1000).toFixed(0)}s  ·  ${describeConfig(r.config)}`,
       };
     }),
+    { value: 'back', label: 'Back', hint: '' },
   ];
 
   const options = (): Option[] => {
     switch (stepKey) {
       case 'start':
         return startOptions();
+      case 'replays':
+        return replayOptions();
       case 'leftProvider':
       case 'rightProvider':
         return providerOptions();
@@ -284,7 +302,9 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
     const who = `${side(stepKey).toUpperCase()} GLADIATOR`;
     switch (stepKey) {
       case 'start':
-        return 'WHAT WILL IT BE?';
+        return '';
+      case 'replays':
+        return 'REPLAYS';
       case 'leftProvider':
       case 'rightProvider':
         return `${who}  ·  PROVIDER`;
@@ -344,6 +364,7 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
   };
 
   const retreat = () => {
+    if (stepKey === 'replays') return goto('start');
     const here = ORDER.indexOf(stepKey);
     const prev = [...visible].reverse().find((k) => ORDER.indexOf(k) < here);
     if (prev) goto(prev);
@@ -355,8 +376,15 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
       else if (value.startsWith(PRESET)) {
         const cfg = presets.find(([n]) => n === value.slice(PRESET.length))?.[1];
         if (cfg) onComplete(cfg);
-      } else if (value.startsWith(REPLAY)) onReplay(value.slice(REPLAY.length));
-      else advance('start', sel);
+      } else if (value === 'replays') goto('replays');
+      else if (value === 'hall') onHall();
+      else if (value === 'quit') onQuit();
+      else advance('replays', sel);
+      return;
+    }
+    if (stepKey === 'replays') {
+      if (value.startsWith(REPLAY)) onReplay(value.slice(REPLAY.length));
+      else goto('start');
       return;
     }
     const next: Selection = { ...sel, [stepKey]: value };
@@ -428,6 +456,12 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
 
   useInput((input, key) => {
     if (busy) return;
+
+    // The menus take single keys; the wizard's text steps must not.
+    if (stepKey === 'start' || stepKey === 'replays') {
+      if (input === 'q' && stepKey === 'start') return onQuit();
+      if (key.escape && stepKey === 'replays') return goto('start');
+    }
 
     // Free-text modes: the key step and the custom-model prompt.
     if (isKeyStep || customMode) {
@@ -529,12 +563,17 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
     if (isKeyStep) return 'paste, then ⏎ to save   ·   esc  back';
     if (isModelStep) return 'type to filter   ·   ↑↓ move   ·   ⏎ choose   ·   ← back';
     if (isProviderStep) return '↑↓ move   ·   ⏎ choose   ·   ← back   ·   r  replace a stored key   ·   l  hall of champions';
-    if (stepKey === 'start') return '↑↓ move   ·   ⏎ choose   ·   l  hall of champions';
+    if (stepKey === 'start') return '↑↓ move   ·   ⏎ choose   ·   q  leave';
+    if (stepKey === 'replays') return '↑↓ move   ·   ⏎ watch   ·   esc  back';
     return '↑↓ move   ·   ⏎ choose   ·   ← back   ·   l  hall of champions';
   };
 
   const width = Math.min(cols - 2, 96);
   const cardWidth = Math.floor((width - 3) / 2);
+
+  if (stepKey === 'start' || stepKey === 'replays') {
+    return <MainMenu title={title()} help={HELP[stepKey]('')} options={opts} cursor={cursor} footer={footer()} rows={rows} cols={cols} />;
+  }
 
   return (
     <Box flexDirection="column">
@@ -552,7 +591,7 @@ export function Setup({ onComplete, onHall, onReplay, providerHint, rows = 40, c
           <MatchLine sel={sel} stepKey={stepKey} />
 
           <Box marginTop={1}>
-            <Text color={theme.dim}>{stepKey === 'start' ? '' : `STEP ${position + (hasStart ? 0 : 1)} OF ${visible.length - (hasStart ? 1 : 0)}   `}</Text>
+            <Text color={theme.dim}>{`STEP ${position} OF ${visible.length - 1}   `}</Text>
             <Text color={isSideStep ? color : theme.white} bold>
               {title()}
             </Text>
@@ -696,6 +735,66 @@ function MatchLine({ sel, stepKey }: { sel: Selection; stepKey: StepKey }) {
           </Text>
         </Box>
       ))}
+    </Box>
+  );
+}
+
+/**
+ * The main menu: the amphitheatre, the name, and a short list. Nothing about
+ * gladiators or settings until you choose to set up a match.
+ */
+function MainMenu({
+  title,
+  help,
+  options,
+  cursor,
+  footer,
+  rows,
+  cols,
+}: {
+  title: string;
+  help: string;
+  options: Option[];
+  cursor: number;
+  footer: string;
+  rows: number;
+  cols: number;
+}) {
+  const listRows = options.length + (title ? 3 : 0) + 4;
+  // The cursor and its gap take three columns ahead of the label.
+  const labelWidth = Math.max(12, ...options.map((o) => o.label.length)) + 6;
+  const width = Math.min(cols - 4, labelWidth + 64);
+  return (
+    <Box flexDirection="column" alignItems="center" height={rows}>
+      <Box flexGrow={1} />
+      <Backdrop rows={Math.max(8, rows - listRows - 3)} cols={cols} subtitle="Two agents enter. One process leaves." />
+      <Box flexDirection="column" width={width} marginTop={1}>
+        {title ? (
+          <Box flexDirection="column" marginBottom={1}>
+            <Text color={theme.white} bold>
+              {title}
+            </Text>
+            <Text color={theme.faint}>{help}</Text>
+          </Box>
+        ) : null}
+        {options.map((opt, i) => {
+          const active = i === cursor;
+          return (
+            <Box key={opt.value}>
+              <Box width={labelWidth} flexShrink={0}>
+                <Text color={active ? theme.white : theme.muted} bold={active}>
+                  {`${active ? '❯' : ' '}  ${opt.label}`}
+                </Text>
+              </Box>
+              <Text color={active ? theme.faint : theme.charcoal} wrap="truncate-end">
+                {opt.hint ?? ''}
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
+      <Box flexGrow={1} />
+      <Text color={theme.dim}>{footer}</Text>
     </Box>
   );
 }
