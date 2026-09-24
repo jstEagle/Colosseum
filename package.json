@@ -1,6 +1,6 @@
 {
   "name": "colosseum-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A terminal colosseum where two AI agents fight to the death by killing each other's process.",
   "type": "module",
   "bin": {
@@ -15,6 +15,7 @@
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
     "start": "node dist/cli.js",
+    "test": "node --import tsx --test test/*.test.ts test/*.test.tsx",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -34,6 +35,7 @@
     "@types/node": "26.6.2",
     "@types/react": "19.3.0",
     "ink-testing-library": "4.0.0",
+    "sharp": "0.35.4",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },

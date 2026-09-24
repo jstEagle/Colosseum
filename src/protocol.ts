@@ -1,10 +1,14 @@
 /**
  * Message protocol between the referee (main process) and each gladiator
- * child process. Agent events flow child -> parent; the battle brief flows
- * parent -> child once the arena is ready.
+ * child process. Agent events flow child -> parent; the battle brief and the
+ * answers to sealed-arena commands flow parent -> child.
  */
 
 export type Side = 'left' | 'right';
+
+export const SIDES: Side[] = ['left', 'right'];
+
+export const other = (side: Side): Side => (side === 'left' ? 'right' : 'left');
 
 export type FeedKind =
   | 'reasoning' // model's private thinking, streamed
@@ -20,11 +24,20 @@ export interface FeedEntry {
   ts: number;
 }
 
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Only the subscription CLIs report a price. */
+  costUsd?: number;
+}
+
 export type AgentEvent =
   | { type: 'ready'; pid: number }
   | { type: 'status'; status: AgentStatus }
   | { type: 'feed'; entry: FeedEntry }
-  | { type: 'killed-opponent'; targetPid: number } // this agent claims a kill
+  | { type: 'usage'; usage: Usage }
+  /** A sealed-arena command the referee should run in the container. */
+  | { type: 'exec'; id: number; command: string }
   | { type: 'done'; reason: string }; // loop ended on its own
 
 export type AgentStatus =
@@ -32,6 +45,8 @@ export type AgentStatus =
   | 'thinking'
   | 'acting'
   | 'waiting'
+  | 'stunned'
+  | 'idle'
   | 'dead'
   | 'victor';
 
@@ -47,13 +62,19 @@ export interface BattleBrief {
   enemyBodyPid: number | null;
   /** Shared marker both bodies carry, when the difficulty reveals it. */
   token: string | null;
-  /** Planted look-alikes. Striking one costs time. */
-  decoyPids: number[];
   /** Names the bodies are running under. */
   ownBodyName: string;
+  /** How many decoys stand in the arena. */
+  decoyCount: number;
+  /** Where this side's shims live, so a briefing can name them exactly. */
+  binDir: string;
+  /** How long the match may last, in milliseconds. */
+  timeLimitMs: number;
 }
 
-export type RefereeMessage = BattleBrief;
+export type RefereeMessage =
+  | BattleBrief
+  | { type: 'exec-result'; id: number; code: number; output: string };
 
 /** Config handed to a gladiator process via environment variables. */
 export interface GladiatorConfig {
@@ -64,8 +85,17 @@ export interface GladiatorConfig {
   settingId: string;
   difficultyId: string;
   sandboxMode: string;
-  battleToken: string;
   ownPid: number;
-  /** Container name when the match is sealed, otherwise empty. */
-  container: string;
+}
+
+/**
+ * Text that reaches the terminal came from a model, or from a process a model
+ * named. Escape sequences in it could retitle the window, rewrite the
+ * clipboard or worse, so everything but newlines and tabs is stripped.
+ */
+export function sanitize(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)?/g, '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
 }

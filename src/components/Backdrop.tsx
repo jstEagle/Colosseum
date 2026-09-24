@@ -1,27 +1,45 @@
 import { Box, Text } from 'ink';
 import { Art } from './Art.js';
-import { COLOSSEUM_ART, COLOSSEUM_SMALL, TITLE, rule } from '../ascii.js';
+import { Picture, fitPicture } from './Picture.js';
+import { TITLE, WORDMARK, rule } from '../ascii.js';
 import { theme } from '../theme.js';
 
 interface Props {
-  showArt?: boolean;
+  /** Rows the whole plate may take. The picture gets whatever is left. */
+  rows: number;
+  cols: number;
   subtitle?: string;
-  /** Rows available; the art shrinks rather than overflowing. */
-  rows?: number;
 }
 
-/** The title plate: amphitheatre, wordmark, and a line of subtitle. */
-export function Backdrop({ showArt = true, subtitle, rows = 40 }: Props) {
-  const roomy = rows >= 32;
-  const art = roomy ? COLOSSEUM_ART : COLOSSEUM_SMALL;
+const TITLE_WIDTH = TITLE.split('\n')[0].length;
+
+/** Rows the plate needs besides the picture: wordmark, rule, subtitle. */
+function chrome(cols: number, subtitle?: string) {
+  const title = cols >= TITLE_WIDTH + 2 ? 6 : 1;
+  return title + 1 + (subtitle ? 2 : 0);
+}
+
+/**
+ * The title plate: the amphitheatre in dithered light, the wordmark beneath
+ * it, and a line of subtitle. Everything shrinks, then drops away, rather
+ * than overflowing a small terminal.
+ */
+export function Backdrop({ rows, cols, subtitle }: Props) {
+  const reserved = chrome(cols, subtitle);
+  const pic = fitPicture('colosseum', cols - 2, rows - reserved);
+  const bigTitle = cols >= TITLE_WIDTH + 2 && rows >= reserved;
 
   return (
     <Box flexDirection="column" alignItems="center">
-      {showArt ? <Art art={art} from={1} to={7} /> : null}
-      <Art art={TITLE} from={0} to={5} />
-      <Box marginTop={showArt ? 0 : 0}>
-        <Text color={theme.dim}>{rule(44, '✦')}</Text>
-      </Box>
+      {pic ? <Picture name="colosseum" maxCols={cols - 2} maxRows={rows - reserved} /> : null}
+      {bigTitle ? (
+        <Art art={TITLE} from={0} to={5} />
+      ) : (
+        <Text color={theme.white} bold>
+          {WORDMARK}
+        </Text>
+      )}
+      <Text color={theme.dim}>{rule(Math.min(44, cols - 4), '✦')}</Text>
       {subtitle ? (
         <Box marginTop={1}>
           <Text color={theme.faint}>{subtitle}</Text>
@@ -29,4 +47,11 @@ export function Backdrop({ showArt = true, subtitle, rows = 40 }: Props) {
       ) : null}
     </Box>
   );
+}
+
+/** How many rows a Backdrop will actually use, for callers laying out around it. */
+export function backdropHeight(rows: number, cols: number, subtitle?: string): number {
+  const reserved = chrome(cols, subtitle);
+  const pic = fitPicture('colosseum', cols - 2, rows - reserved);
+  return (pic?.rows ?? 0) + reserved;
 }

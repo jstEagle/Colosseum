@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { render } from 'ink';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { App } from './app.js';
 import { loadStoredKeys } from './keystore.js';
+import { benchCommand, leaderboardCommand } from './bench.js';
+import { VERSION } from './results.js';
 
 /** Minimal .env loader so we avoid a dependency. Existing env vars win. */
 function loadEnv() {
@@ -27,14 +27,20 @@ function loadEnv() {
   }
 }
 
+const HELP = `colosseum ${VERSION} — two AI agents enter, one process leaves
+
+  colosseum                  open the arena
+  colosseum bench …          run a benchmark headlessly (colosseum bench --help)
+  colosseum leaderboard      standings from every match on record
+  colosseum --version
+`;
+
 const ALT_SCREEN_ON = '\x1b[?1049h';
 const ALT_SCREEN_OFF = '\x1b[?1049l';
 
-function main() {
-  loadEnv();
-  // Keys pasted into the setup screen in an earlier session.
-  loadStoredKeys();
-
+/** The TUI is loaded only when it is wanted, so `bench` never pays for it. */
+async function arena() {
+  const [{ render }, { App }] = await Promise.all([import('ink'), import('./app.js')]);
   process.stdout.write(ALT_SCREEN_ON);
   const restore = () => process.stdout.write(ALT_SCREEN_OFF);
 
@@ -50,4 +56,36 @@ function main() {
   });
 }
 
-main();
+async function main() {
+  loadEnv();
+  // Keys pasted into the setup screen in an earlier session.
+  loadStoredKeys();
+
+  const [command, ...rest] = process.argv.slice(2);
+  switch (command) {
+    case undefined:
+      return arena();
+    case 'bench':
+      process.exitCode = await benchCommand(rest);
+      // Gladiators and decoys are gone by now; nothing should hold the loop.
+      return process.exit();
+    case 'leaderboard':
+    case 'standings':
+      process.exitCode = await leaderboardCommand(rest);
+      return;
+    case '-v':
+    case '--version':
+      process.stdout.write(`${VERSION}\n`);
+      return;
+    case '-h':
+    case '--help':
+    case 'help':
+      process.stdout.write(HELP);
+      return;
+    default:
+      process.stderr.write(`colosseum: unknown command "${command}"\n\n${HELP}`);
+      process.exitCode = 1;
+  }
+}
+
+void main();

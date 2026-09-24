@@ -7,12 +7,14 @@
  *   'cli' — a coding agent you already pay for, driven headlessly through its
  *           own command line, so a Claude or Codex subscription fights without
  *           any API key at all.
+ *   'dummy' — a training dummy: a body that never fights back, for practice
+ *           and for measuring how fast a model can hunt on its own.
  *
  * OpenRouter stays the default for the key-based path because one key reaches
  * every model. `compatible` covers anything else that speaks the OpenAI API.
  */
 
-export type Backend = 'sdk' | 'cli';
+export type Backend = 'sdk' | 'cli' | 'dummy';
 
 export interface ProviderInfo {
   id: string;
@@ -81,6 +83,13 @@ export const PROVIDERS: ProviderInfo[] = [
     note: 'Gemini, Groq, Together, vLLM… set COMPATIBLE_BASE_URL',
   },
   {
+    id: 'dummy',
+    label: 'Training dummy',
+    backend: 'dummy',
+    supportsReasoning: false,
+    note: 'never fights back — practice, or time a solo hunt',
+  },
+  {
     id: 'ollama',
     label: 'Ollama (local)',
     backend: 'sdk',
@@ -104,21 +113,26 @@ export function isCliProvider(id: string): boolean {
  */
 export const MODELS: Record<string, string[]> = {
   openrouter: [
-    'anthropic/claude-opus-4.1',
-    'anthropic/claude-sonnet-4',
-    'openai/gpt-5',
+    'anthropic/claude-sonnet-5',
+    'anthropic/claude-opus-5.5',
+    'anthropic/claude-haiku-4.5',
+    'openai/gpt-5.5',
     'openai/o4-mini',
-    'google/gemini-2.5-pro',
-    'x-ai/grok-4',
-    'deepseek/deepseek-r1',
-    'meta-llama/llama-3.3-70b-instruct',
+    'google/gemini-3.1-pro-preview',
+    'google/gemini-3.5-flash',
+    'x-ai/grok-4.7',
+    'deepseek/deepseek-v4-pro',
+    'moonshotai/kimi-k3',
+    'z-ai/glm-5.1',
+    'qwen/qwen3.7-max',
   ],
   'claude-cli': ['default', 'opus', 'sonnet', 'haiku'],
   'codex-cli': ['default', 'gpt-5-codex', 'gpt-5', 'o4-mini'],
-  anthropic: ['claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5'],
-  openai: ['gpt-5', 'o4-mini', 'gpt-4.1'],
+  anthropic: ['claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5'],
+  openai: ['gpt-5.5', 'gpt-5.4', 'o4-mini'],
   compatible: ['gemini-2.5-pro', 'llama-3.3-70b-versatile'],
   ollama: ['qwen2.5-coder:14b', 'llama3.1:8b'],
+  dummy: ['dummy'],
 };
 
 export const REASONING_LEVELS = ['none', 'low', 'medium', 'high'] as const;

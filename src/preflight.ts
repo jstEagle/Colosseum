@@ -45,7 +45,10 @@ export interface ProviderState {
 export function providerState(providerId: string): ProviderState {
   const p = getProvider(providerId);
 
+  if (p.backend === 'dummy') return { ready: true, hint: p.note };
+
   if (p.backend === 'cli') {
+    if (!seatbeltAvailable()) return { ready: false, hint: 'subscription CLIs are confined by Seatbelt: macOS only' };
     if (!hasBinary(p.bin!)) return { ready: false, hint: `install the \`${p.bin}\` CLI` };
     if (!cliSignedIn(p.id)) return { ready: false, hint: `run \`${p.bin}\` once and sign in` };
     return { ready: true, hint: 'signed in — no API key needed' };

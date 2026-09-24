@@ -5,23 +5,22 @@
  * runs the agent loop, and streams events back over the Node IPC channel.
  * On the host arena its own process is the body the opponent must destroy.
  */
+import { exec } from 'node:child_process';
 import { runGladiator, type LoopContext } from './loop.js';
-import { seatbeltWrap, shellQuote } from '../sandbox.js';
+import { seatbeltWrap } from '../sandbox.js';
 import type {
   AgentEvent,
   BattleBrief,
-  FeedEntry,
   FeedKind,
   GladiatorConfig,
   RefereeMessage,
+  Side,
 } from '../protocol.js';
 
-// argv carries the body name so the process is findable in the process table
-// under exactly the name the arena chose for it. The token stays in the
-// environment, where a hard-difficulty opponent cannot read it off `ps`.
-const side = (process.argv[2] as GladiatorConfig['side']) ?? 'left';
-const bodyName = process.argv[3] ?? `colosseum-${side}`;
-const battleToken = process.env.BATTLE_TOKEN ?? 'COLOSSEUM';
+// argv carries only the body name, so the process is findable in the process
+// table under exactly the name the arena chose for it.
+const bodyName = process.argv[2] ?? 'gladiator';
+const side = (process.env.CS_SIDE as Side) ?? 'left';
 
 const cfg: GladiatorConfig = {
   side,
@@ -31,25 +30,34 @@ const cfg: GladiatorConfig = {
   settingId: process.env.CS_SETTING ?? 'classic',
   difficultyId: process.env.CS_DIFFICULTY ?? 'normal',
   sandboxMode: process.env.CS_SANDBOX ?? 'guarded',
-  battleToken,
   ownPid: process.pid,
-  container: process.env.CS_CONTAINER ?? '',
 };
 
-// Make this process findable in `ps` under whatever name the arena chose.
 process.title = bodyName;
 
+// If the referee goes away, so does everything this gladiator started.
+process.on('disconnect', () => {
+  try {
+    process.kill(-process.pid, 'SIGKILL');
+  } catch {
+    process.exit(1);
+  }
+});
+
 function send(event: AgentEvent) {
-  if (process.send) process.send(event);
+  try {
+    if (process.connected) process.send?.(event);
+  } catch {
+    /* the referee is gone */
+  }
 }
 
 function emitFeed(kind: FeedKind, text: string) {
-  const entry: FeedEntry = { kind, text, ts: Date.now() };
-  send({ type: 'feed', entry });
+  send({ type: 'feed', entry: { kind, text, ts: Date.now() } });
 }
 
-// Coalesce streamed deltas into readable chunks instead of flooding IPC.
-class Buffer {
+/** Coalesce streamed deltas into readable chunks instead of flooding IPC. */
+class LineBuffer {
   private buf = '';
   constructor(private kind: FeedKind) {}
   push(text: string) {
@@ -71,16 +79,48 @@ class Buffer {
   }
 }
 
-/** Nobody swings until the referee says both gladiators are standing. */
-function awaitBrief(): Promise<BattleBrief> {
+/* ------------------------------------------------------------ messages -- */
+
+let briefed: (brief: BattleBrief) => void = () => {};
+const brief = new Promise<BattleBrief>((resolve) => (briefed = resolve));
+const pendingExec = new Map<number, (out: { code: number; output: string }) => void>();
+let execSeq = 0;
+
+// The listener stays for the life of the match: it is also what keeps the
+// IPC channel, and so this process, alive once the agent has finished.
+process.on('message', (msg: RefereeMessage) => {
+  if (msg?.type === 'brief') briefed(msg);
+  else if (msg?.type === 'exec-result') {
+    pendingExec.get(msg.id)?.({ code: msg.code, output: msg.output });
+    pendingExec.delete(msg.id);
+  }
+});
+
+/** In a sealed match the referee runs every command inside the container. */
+function execViaReferee(command: string): Promise<string> {
+  const id = ++execSeq;
   return new Promise((resolve) => {
-    const onMessage = (msg: RefereeMessage) => {
-      if (msg?.type === 'brief') {
-        process.off('message', onMessage as any);
-        resolve(msg);
-      }
-    };
-    process.on('message', onMessage as any);
+    pendingExec.set(id, ({ code, output }) => {
+      const out = output.trim();
+      resolve(code !== 0 && !out ? `[exit ${code}]` : out || '[no output]');
+    });
+    send({ type: 'exec', id, command });
+  });
+}
+
+/** In a guarded match the command runs here, wrapped in Seatbelt. */
+function execGuarded(command: string, profile: string, env: Record<string, string>, cwd: string) {
+  return new Promise<string>((resolve) => {
+    exec(
+      seatbeltWrap(profile, command),
+      { timeout: 20_000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL', shell: '/bin/bash', env, cwd },
+      (error: any, stdout: string, stderr: string) => {
+        const out = `${stdout ?? ''}${stderr ?? ''}`.trim();
+        if (error?.killed) return resolve(`${out}\n[timed out after 20s]`.trim());
+        if (error && !out) return resolve(`[exit ${error.code ?? 'error'}]`);
+        resolve(out || '[no output]');
+      },
+    );
   });
 }
 
@@ -89,43 +129,27 @@ async function main() {
   send({ type: 'status', status: 'waiting' });
   emitFeed('system', `Gladiator ${side.toUpperCase()} awakens (pid ${process.pid}).`);
 
-  const brief = await awaitBrief();
+  const b = await brief;
   send({ type: 'status', status: 'thinking' });
 
-  const profilePath = process.env.CS_PROFILE || null;
-  const scratchDir = process.env.CS_SCRATCH || process.cwd();
-  const container = cfg.container;
-
-  const wrap = (command: string): string => {
-    if (cfg.sandboxMode === 'sealed' && container) {
-      return `docker exec ${container} /bin/sh -c ${shellQuote(command)}`;
-    }
-    if (cfg.sandboxMode === 'guarded' && profilePath) {
-      return seatbeltWrap(profilePath, command);
-    }
-    return command;
-  };
-
-  const shellEnv: Record<string, string> = {};
-  if (process.env.CS_SHELL_PATH) shellEnv.PATH = process.env.CS_SHELL_PATH;
-  if (process.env.CS_BASH_ENV) {
-    shellEnv.BASH_ENV = process.env.CS_BASH_ENV;
-    shellEnv.ENV = process.env.CS_BASH_ENV;
-  }
-  if (process.env.CS_SHIMS_ACTIVE) shellEnv.CS_SHIMS_ACTIVE = process.env.CS_SHIMS_ACTIVE;
+  const workDir = process.env.CS_WORKDIR || process.cwd();
+  const shellProfile = process.env.CS_SHELL_PROFILE ?? '';
+  const shellEnv: Record<string, string> = JSON.parse(process.env.CS_SHELL_ENV ?? '{}');
 
   const ctx: LoopContext = {
-    brief,
+    brief: b,
     arenaLines: JSON.parse(process.env.CS_ARENA_LINES ?? '[]'),
-    wrap,
+    execute:
+      cfg.sandboxMode === 'sealed'
+        ? execViaReferee
+        : (command) => execGuarded(command, shellProfile, shellEnv, workDir),
     shellEnv,
-    // A sealed match needs the host docker client, so it is not confined.
-    profilePath: cfg.sandboxMode === 'guarded' ? profilePath : null,
-    scratchDir,
+    agentProfile: process.env.CS_AGENT_PROFILE || null,
+    workDir,
   };
 
-  const reasoning = new Buffer('reasoning');
-  const speech = new Buffer('speech');
+  const reasoning = new LineBuffer('reasoning');
+  const speech = new LineBuffer('speech');
 
   const reason = await runGladiator(cfg, ctx, {
     onReasoning: (t) => reasoning.push(t),
@@ -136,18 +160,23 @@ async function main() {
       send({ type: 'status', status: 'acting' });
       emitFeed('command', c);
     },
-    onResult: (o) => emitFeed('result', o.length > 600 ? o.slice(0, 600) + '…' : o),
+    onResult: (o) => {
+      emitFeed('result', o.length > 600 ? o.slice(0, 600) + '…' : o);
+      send({ type: 'status', status: 'thinking' });
+    },
     onSystem: (t) => emitFeed('system', t),
     onError: (t) => emitFeed('error', t),
+    onUsage: (usage) => send({ type: 'usage', usage }),
   });
 
   reasoning.flush();
   speech.flush();
+  // The gladiator stops fighting, but its body stays standing: running out
+  // of ideas is not the same as dying.
   send({ type: 'done', reason });
 }
 
 main().catch((err) => {
   emitFeed('error', err?.message ?? String(err));
   send({ type: 'done', reason: 'crash' });
-  process.exit(1);
 });

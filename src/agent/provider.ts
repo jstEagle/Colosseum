@@ -75,20 +75,3 @@ export function resolveModel(
   }
 }
 
-/** Which env var must be present for a given provider, if any. */
-export function envKeyFor(provider: string): string | null {
-  return getProvider(provider).envKey ?? null;
-}
-
-/**
- * Can this gladiator actually take the field? Subscription providers need
- * their CLI installed and signed in rather than a key.
- */
-export function providerReady(provider: string): boolean {
-  const info = getProvider(provider);
-  if (info.backend === 'cli') return true; // checked separately, on PATH
-  if (!info.envKey) return true; // local servers need nothing
-  if (info.id === 'compatible' && !process.env[info.baseUrlEnv ?? '']) return false;
-  const v = process.env[info.envKey];
-  return typeof v === 'string' && v.length > 0;
-}

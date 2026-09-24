@@ -8,3 +8,4 @@ npm-debug.log*
 
 # Gladiator briefings, if a match is interrupted before it can shred them
 .brief-*
+art-preview/

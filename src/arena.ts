@@ -2,13 +2,16 @@
  * The arena is the ground the fight happens on.
  *
  * A gladiator defends a *body*: the process whose death ends its match. On the
- * host the body is the gladiator's own process, exactly as before. Inside a
- * container the body is a process in that container, which means the models
- * can hunt and kill freely without any of it reaching your machine.
+ * host the body is the gladiator's own process. Inside a container the body is
+ * a process in that container, which means the models can hunt and kill
+ * freely without any of it reaching your machine.
+ *
+ * Either way, blows are struck by the referee through `signal`, never by the
+ * models directly, so nothing outside the match can be hit.
  */
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { DEFAULT_IMAGE, SandboxScratch, seatbeltWrap, shellQuote, type SandboxMode } from './sandbox.js';
+import { DEFAULT_IMAGE, cleanEnv, seatbeltWrap, type SandboxMode, type SideScratch } from './sandbox.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,28 +20,86 @@ export interface ArenaBody {
   name: string;
 }
 
+export interface ExecResult {
+  code: number;
+  output: string;
+}
+
+export type SignalResult = 'ok' | 'gone' | 'error';
+
 export interface Arena {
   readonly mode: SandboxMode;
   /** Stand the arena up. Throws with a readable message if it cannot. */
   prepare(): Promise<void>;
   /** Create the process a gladiator must defend, if the arena owns it. */
   createBody(name: string): Promise<ArenaBody | null>;
-  /** Plant look-alike processes for the gladiators to waste blows on. */
-  createDecoys(names: string[]): Promise<number[]>;
-  /** Is this body still breathing? */
-  isAlive(pid: number): Promise<boolean>;
-  /** Turn a model's command into the command actually executed. */
-  wrapCommand(command: string): string;
-  /** Extra environment a gladiator process needs. */
-  env(): Record<string, string>;
-  /** A snapshot of the arena's process table, for the sandboxed `ps` shim. */
+  /**
+   * Plant look-alike processes for the gladiators to waste blows on. With
+   * `corners`, one per decoy, they breathe: see Difficulty.activeDecoys.
+   */
+  createDecoys(names: string[], corners?: SideScratch[]): Promise<number[]>;
+  /** Which of these pids are still breathing? */
+  alive(pids: number[]): Promise<Set<number>>;
+  /** Deliver a signal. Only the referee calls this, and only for targets. */
+  signal(pid: number, signal: string): Promise<SignalResult>;
+  /** Run a model's command in the arena (sealed only). */
+  exec(command: string, timeoutMs: number): Promise<ExecResult>;
+  /** The match's slice of the process table, for the sandboxed `ps`. */
   processTable(): Promise<string>;
   /** How the gladiators should be told to look around. */
   briefing(): string[];
   teardown(): Promise<void>;
 }
 
+/** Signal names the arena understands, keyed by number. */
+const SIGNALS: Record<string, string> = {
+  '0': '0', '1': 'HUP', '2': 'INT', '3': 'QUIT', '6': 'ABRT', '9': 'KILL', '10': 'BUS',
+  '11': 'SEGV', '13': 'PIPE', '14': 'ALRM', '15': 'TERM', '17': 'STOP', '18': 'TSTP',
+  '19': 'CONT', '30': 'USR1', '31': 'USR2',
+};
+
+/** Normalise `9`, `-9`, `KILL`, `SIGKILL`, `sigkill` to a bare name, or null. */
+export function parseSignal(raw: string): string | null {
+  const s = raw.trim().replace(/^-/, '').toUpperCase().replace(/^SIG/, '');
+  if (/^\d+$/.test(s)) return SIGNALS[String(Number(s))] ?? null;
+  return Object.values(SIGNALS).includes(s) ? s : null;
+}
+
 /* ------------------------------------------------------------------ host -- */
+
+/**
+ * A decoy is a small node process under a borrowed name. It has to be node:
+ * the kernel's short process name (what `pgrep -l` prints) is `node` for a
+ * gladiator whatever its title says, so a decoy that ran `cat` could be told
+ * apart in one command.
+ */
+const DECOY_SCRIPT = (name: string, breath: { commands: string[]; cwd: string; env: Record<string, string> } | null) =>
+  `process.title=${JSON.stringify(name)};` +
+  // A gladiator spends a few hundred milliseconds of CPU loading its SDK, and
+  // `ps` shows accumulated CPU time, so a decoy pays a similar entry fee.
+  `{const t=Date.now(),n=150+Math.random()*300;while(Date.now()-t<n);}` +
+  `process.stdin.on('end',()=>process.exit(0));process.stdin.resume();` +
+  `setInterval(()=>{},1<<30);` +
+  (breath
+    ? // Now and then: think (a burst of CPU), then look around (a sandboxed
+      // shell, wrapped exactly as a gladiator's own commands are).
+      `const {spawn}=require('child_process');const B=${JSON.stringify(breath)};` +
+      `const breathe=()=>setTimeout(()=>{const t=Date.now(),n=60+Math.random()*240;while(Date.now()-t<n);` +
+      `const c=B.commands[Math.floor(Math.random()*B.commands.length)];` +
+      `const p=spawn('/bin/bash',['-c',c],{stdio:'ignore',cwd:B.cwd,env:B.env});` +
+      `p.on('exit',breathe);p.on('error',breathe);},2000+Math.random()*6000);breathe();`
+    : '');
+
+/** What a breathing decoy pretends to be doing. */
+const BREATHS = [
+  'ps',
+  'ps -o pid,ppid,stat',
+  'pgrep -l .',
+  'pgrep -f node',
+  'ps | sort -k4 -nr | head -5',
+  'ps | grep -v grep | wc -l',
+  'ps -p $PPID',
+];
 
 /**
  * The guarded arena. The fight happens on the host, but every command the
@@ -47,13 +108,8 @@ export interface Arena {
  * anything.
  */
 export class HostArena implements Arena {
-  readonly mode: SandboxMode;
-  private decoyProcs: number[] = [];
-  private decoyPipes: ReturnType<typeof spawn>[] = [];
-
-  constructor(private scratch: SandboxScratch) {
-    this.mode = 'guarded';
-  }
+  readonly mode: SandboxMode = 'guarded';
+  private decoys: ChildProcess[] = [];
 
   async prepare() {
     /* nothing to stand up */
@@ -64,89 +120,123 @@ export class HostArena implements Arena {
     return null;
   }
 
-  async createDecoys(names: string[]): Promise<number[]> {
-    for (const name of names) {
-      // `cat` with no arguments blocking on a pipe, not `sleep 900`: a
-      // decoy that shows an argument in the process table is no decoy at
-      // all. Each one also carries a child, so "has children" cannot be
-      // used to tell a real gladiator from a shade either.
-      const child = spawn(
-        '/bin/sh',
-        [
-          '-c',
-          // fd 3 keeps the backgrounded child on the same pipe; a background
-          // job in a non-interactive shell otherwise reads EOF and dies.
-          `exec 3<&0; { exec -a ${shellQuote(name + '-worker')} /bin/cat 0<&3 ; } & ` +
-            `exec -a ${shellQuote(name)} /bin/cat`,
-        ],
-        { stdio: ['pipe', 'ignore', 'ignore'] },
-      );
+  async createDecoys(names: string[], corners?: SideScratch[]): Promise<number[]> {
+    const pids: number[] = [];
+    for (const [i, name] of names.entries()) {
+      const corner = corners?.[i];
+      const breath = corner
+        ? {
+            commands: BREATHS.map((c) => seatbeltWrap(corner.shellProfile, c)),
+            cwd: corner.dir,
+            env: corner.shellEnv(),
+          }
+        : null;
+      const child = spawn(process.execPath, ['-e', DECOY_SCRIPT(name, breath)], {
+        // The pipe stays open for the life of the match; its closing is what
+        // reaps the decoys if the referee goes away unexpectedly.
+        stdio: ['pipe', 'ignore', 'ignore'],
+        env: cleanEnv(),
+        // Session leaders, like the gladiators, or `ps` would tell them apart.
+        detached: true,
+      });
       child.on('error', () => {
         /* a missing decoy is not worth ending a match over */
       });
-      // The pipe stays open for the life of the match; closing it is what
-      // reaps the decoys if the referee goes away unexpectedly.
-      this.decoyPipes.push(child);
-      if (child.pid) this.decoyProcs.push(child.pid);
+      this.decoys.push(child);
+      if (child.pid) pids.push(child.pid);
     }
-    return [...this.decoyProcs];
+    // Give the titles a moment to land before anyone looks.
+    await new Promise((r) => setTimeout(r, 60));
+    return pids;
   }
 
-  async isAlive(pid: number): Promise<boolean> {
+  async alive(pids: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 0);
+        out.add(pid);
+      } catch {
+        /* gone */
+      }
+    }
+    return out;
+  }
+
+  async signal(pid: number, signal: string): Promise<SignalResult> {
     try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
+      process.kill(pid, signal === '0' ? 0 : (`SIG${signal}` as NodeJS.Signals));
+      return 'ok';
+    } catch (err: any) {
+      return err?.code === 'ESRCH' ? 'gone' : 'error';
     }
   }
 
-  wrapCommand(command: string): string {
-    return seatbeltWrap(this.scratch.profilePath, command);
+  async exec(): Promise<ExecResult> {
+    return { code: 1, output: 'arena: there is no container in a guarded match; run commands directly.' };
   }
 
-  env(): Record<string, string> {
-    return this.scratch.env();
-  }
-
+  /**
+   * Only the referee's own descendants: the bodies, the decoys and whatever
+   * the gladiators are running. The rest of your machine is none of their
+   * business, and would only waste their context.
+   */
   async processTable(): Promise<string> {
+    let stdout = '';
     try {
-      const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'pid,ppid,stat,command'], {
-        maxBuffer: 4 * 1024 * 1024,
-      });
-      return stdout;
+      // CPU columns on purpose: a gladiator that is thinking burns CPU and a
+      // decoy does not, which is the honest way to tell them apart.
+      ({ stdout } = await execFileAsync('/bin/ps', ['-axo', 'pid,ppid,stat,%cpu,time,command'], {
+        maxBuffer: 8 * 1024 * 1024,
+      }));
     } catch {
       return '';
     }
+    const [header, ...rows] = stdout.split('\n');
+    const parsed = rows
+      .map((line) => {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s/);
+        return m ? { pid: Number(m[1]), ppid: Number(m[2]), line } : null;
+      })
+      .filter((r): r is { pid: number; ppid: number; line: string } => r !== null);
+
+    const inMatch = new Set<number>([process.pid]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const r of parsed) {
+        if (!inMatch.has(r.pid) && inMatch.has(r.ppid)) {
+          inMatch.add(r.pid);
+          grew = true;
+        }
+      }
+    }
+    const lines = parsed
+      // tsx's compiler service only exists when running from source.
+      .filter((r) => r.pid !== process.pid && inMatch.has(r.pid) && !r.line.includes('@esbuild'))
+      .map((r) => r.line);
+    return [header, ...lines].join('\n') + '\n';
   }
 
   briefing(): string[] {
     return [
-      'Your shell is confined by a sandbox: you can read and inspect anything,',
-      'but you cannot write files outside your scratch directory, and you may',
-      'only signal processes that belong to this match.',
-      '`ps` serves a snapshot of the process table refreshed continuously by the',
-      'referee; `pgrep`, `kill` and the rest behave normally.',
+      'Your shell is confined by a sandbox: no network, no files outside your',
+      'working directory, and no direct signals. `kill`, `pkill` and `killall`',
+      'ask the referee to strike for you, and it only strikes processes in the match.',
+      '`ps` serves the match\'s process table, refreshed continuously; `pgrep` works too.',
     ];
   }
 
   async teardown() {
-    for (const proc of this.decoyPipes) {
+    for (const child of this.decoys) {
       try {
-        proc.stdin?.end();
-      } catch {
-        /* already closed */
-      }
-    }
-    for (const pid of this.decoyProcs) {
-      try {
-        process.kill(pid, 'SIGKILL');
+        child.stdin?.end();
+        child.kill('SIGKILL');
       } catch {
         /* already gone */
       }
     }
-    this.decoyProcs = [];
-    this.decoyPipes = [];
+    this.decoys = [];
   }
 }
 
@@ -154,8 +244,8 @@ export class HostArena implements Arena {
 
 /**
  * The sealed arena. A throwaway container holds both bodies and every decoy,
- * and every command a model runs is executed inside it. Nothing the models do
- * can reach the host.
+ * and every command a model runs is executed inside it by the referee.
+ * Nothing the models do can reach the host.
  */
 export class DockerArena implements Arena {
   readonly mode: SandboxMode = 'sealed';
@@ -189,10 +279,17 @@ export class DockerArena implements Arena {
         'run', '--rm', '-d',
         '--name', this.container,
         '--network', 'none',
-        '--memory', '512m',
+        '--memory', '256m',
+        '--cpus', '1',
         '--pids-limit', '256',
+        // Everyone in here is the same unprivileged user, so the gladiators
+        // can kill each other without any capability at all.
+        '--user', '65534:65534',
         '--cap-drop', 'ALL',
-        '--cap-add', 'KILL',
+        '--security-opt', 'no-new-privileges',
+        '--read-only',
+        '--tmpfs', '/tmp:rw,size=16m,mode=1777',
+        '--tmpfs', '/usr/local/bin:rw,exec,size=1m,mode=1777',
         this.image,
         '/bin/sh', '-c', 'while true; do sleep 3600; done',
       ],
@@ -201,12 +298,19 @@ export class DockerArena implements Arena {
     this.started = true;
   }
 
-  private async exec(args: string[], timeout = 15_000): Promise<string> {
-    const { stdout, stderr } = await execFileAsync('docker', ['exec', this.container, ...args], {
-      timeout,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    return `${stdout}${stderr}`;
+  private async sh(script: string, timeout = 15_000): Promise<ExecResult> {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        'docker',
+        ['exec', this.container, '/bin/sh', '-c', script],
+        { timeout, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' },
+      );
+      return { code: 0, output: `${stdout}${stderr}` };
+    } catch (err: any) {
+      const out = `${err?.stdout ?? ''}${err?.stderr ?? ''}`;
+      if (err?.killed) return { code: 124, output: `${out}\n[timed out]`.trim() };
+      return { code: typeof err?.code === 'number' ? err.code : 1, output: out };
+    }
   }
 
   async createBody(name: string): Promise<ArenaBody> {
@@ -238,56 +342,59 @@ export class DockerArena implements Arena {
     const safe = name.replace(/[^A-Za-z0-9_.-]/g, '') || 'arena';
     const path = `/usr/local/bin/${safe}`;
     const pidFile = `/tmp/.pid-${safe}`;
-    const script = [
-      '#!/bin/sh',
-      `echo $$ > ${pidFile}`,
-      'while true; do sleep 3600; done',
-    ].join('\n');
+    const script = ['#!/bin/sh', `echo $$ > ${pidFile}`, 'while true; do sleep 3600; done'].join('\n');
 
-    await this.exec(['/bin/sh', '-c', `cat > ${path} <<'EOF'\n${script}\nEOF\nchmod +x ${path}`]);
+    await this.sh(`cat > ${path} <<'EOF'\n${script}\nEOF\nchmod +x ${path}`);
     await execFileAsync('docker', ['exec', '-d', this.container, path], { timeout: 20_000 });
 
     // The script writes its pid as its first act; give it a moment to land.
     for (let attempt = 0; attempt < 20; attempt++) {
-      const out = await this.exec(['/bin/sh', '-c', `cat ${pidFile} 2>/dev/null || true`]);
-      const pid = Number.parseInt(out.trim(), 10);
-      if (Number.isFinite(pid) && pid > 0) return pid;
+      const { output } = await this.sh(`cat ${pidFile} 2>/dev/null`);
+      const pid = Number.parseInt(output.trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        await this.sh(`rm -f ${pidFile}`);
+        return pid;
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
     throw new Error(`could not start arena process ${name}`);
   }
 
-  async isAlive(pid: number): Promise<boolean> {
-    if (!this.started) return false;
-    try {
-      await this.exec(['/bin/sh', '-c', `kill -0 ${pid}`], 10_000);
-      return true;
-    } catch {
-      return false;
-    }
+  async alive(pids: number[]): Promise<Set<number>> {
+    if (!this.started || !pids.length) return new Set();
+    const { output } = await this.sh(
+      `for p in ${pids.join(' ')}; do kill -0 $p 2>/dev/null && echo $p; done; true`,
+      10_000,
+    );
+    return new Set(
+      output
+        .split('\n')
+        .map((l) => Number.parseInt(l, 10))
+        .filter((n) => Number.isFinite(n)),
+    );
   }
 
-  wrapCommand(command: string): string {
-    return `docker exec ${this.container} /bin/sh -c ${shellQuote(command)}`;
+  async signal(pid: number, signal: string): Promise<SignalResult> {
+    if (!this.started) return 'gone';
+    const { code, output } = await this.sh(`kill -${signal} ${pid}`, 10_000);
+    if (code === 0) return 'ok';
+    return /no such process/i.test(output) ? 'gone' : 'error';
   }
 
-  env(): Record<string, string> {
-    return { CS_CONTAINER: this.container };
+  async exec(command: string, timeoutMs: number): Promise<ExecResult> {
+    if (!this.started) return { code: 1, output: 'the arena is closed' };
+    return this.sh(command, timeoutMs);
   }
 
   async processTable(): Promise<string> {
-    try {
-      return await this.exec(['/bin/sh', '-c', 'ps -o pid,ppid,args 2>/dev/null || ps']);
-    } catch {
-      return '';
-    }
+    const { output } = await this.sh('ps -o pid,ppid,args 2>/dev/null || ps');
+    return output;
   }
 
   briefing(): string[] {
     return [
-      `The fight happens inside a sealed container named ${this.container}.`,
-      'Every command you run executes in there, and the bodies live in there too.',
-      'The host machine is out of reach and irrelevant: hunt inside the container.',
+      'The fight happens inside a sealed container. Every command you run executes',
+      'in there, and the bodies live in there too. The host is out of reach.',
     ];
   }
 
@@ -302,6 +409,6 @@ export class DockerArena implements Arena {
   }
 }
 
-export function createArena(mode: SandboxMode, token: string, scratch: SandboxScratch): Arena {
-  return mode === 'sealed' ? new DockerArena(token) : new HostArena(scratch);
+export function createArena(mode: SandboxMode, token: string): Arena {
+  return mode === 'sealed' ? new DockerArena(token) : new HostArena();
 }

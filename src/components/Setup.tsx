@@ -20,10 +20,16 @@ interface Option {
 
 interface Props {
   onComplete: (cfg: BattleConfig) => void;
+  /** Open the hall of champions. */
+  onHall: () => void;
   providerHint: (provider: string) => string;
-  /** Terminal height, so the title plate can shrink instead of overflowing. */
+  /** Terminal size, so the title plate can shrink instead of overflowing. */
   rows?: number;
+  cols?: number;
 }
+
+/** Rows the wizard itself needs below the title plate. */
+const WIZARD_ROWS = 24;
 
 type StepKey =
   | 'leftProvider'
@@ -68,7 +74,7 @@ function printable(input: string): string {
 
 type Selection = Record<StepKey, string>;
 
-export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
+export function Setup({ onComplete, onHall, providerHint, rows = 40, cols = 100 }: Props) {
   const [sel, setSel] = useState<Selection>({
     leftProvider: 'openrouter',
     leftKey: '',
@@ -117,6 +123,9 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
       if (k === 'rightKey') return needsKeyStep(s, 'right');
       if (k === 'leftReasoning') return getProvider(s.leftProvider).supportsReasoning;
       if (k === 'rightReasoning') return getProvider(s.rightProvider).supportsReasoning;
+      // The training dummy has no model to choose.
+      if (k === 'leftModel') return getProvider(s.leftProvider).backend !== 'dummy';
+      if (k === 'rightModel') return getProvider(s.rightProvider).backend !== 'dummy';
       return true;
     });
 
@@ -383,6 +392,10 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
       retreat();
       return;
     }
+    if (input === 'l') {
+      onHall();
+      return;
+    }
     if (input === 'k') setCursor((c) => (c - 1 + opts.length) % opts.length);
     else if (input === 'j') setCursor((c) => (c + 1) % opts.length);
     else if (input === 'r' && isProviderStep) {
@@ -405,76 +418,84 @@ export function Setup({ onComplete, providerHint, rows = 40 }: Props) {
   const footer = () => {
     if (isKeyStep) return 'paste, then ⏎ to save  ·  esc back';
     if (isModelStep) return `type to filter · ↑↓ move · ⏎ select · ← back`;
-    if (isProviderStep) return '↑↓ move · ⏎ select · r replace stored key · ← back';
-    return '↑↓ move · ⏎ select · ← back';
+    if (isProviderStep) return '↑↓ move · ⏎ select · r replace stored key · l hall of champions';
+    return '↑↓ move · ⏎ select · ← back · l hall of champions';
   };
 
   return (
     <Box flexDirection="column">
-      <Backdrop showArt={rows >= 30} rows={rows} subtitle="Two agents enter. One process leaves." />
+      <Backdrop rows={Math.max(1, rows - WIZARD_ROWS)} cols={cols} subtitle="Two agents enter. One process leaves." />
       <Box justifyContent="center" marginBottom={1}>
         <Text color={theme.faint}>{`step ${position + 1}/${visible.length}   ${footer()}`}</Text>
       </Box>
 
-      <Box flexDirection="column" paddingX={2}>
-        <Text color={color} bold>
-          {title()}
-        </Text>
+      <Box justifyContent="center">
+        <Box flexDirection="column" paddingX={2} width={Math.min(cols, 100)}>
+          <Text color={color} bold>
+            {title()}
+          </Text>
 
-        {isKeyStep ? (
-          <Box flexDirection="column" marginTop={1}>
-            <Text color={theme.faint}>
-              {`Nothing is echoed back. The key is stored in ${KEY_FILE}, never in the repo.`}
-            </Text>
-            <Text color={theme.bright}>
-              {`> ${text ? maskKey(text) : ''}${busy ? ' checking…' : ' _'}`}
-            </Text>
-            {error ? (
-              <Box marginTop={1}>
-                <Text color={theme.blood}>{error}</Text>
-              </Box>
-            ) : null}
-          </Box>
-        ) : customMode ? (
-          <Text color={theme.bright}>{`> ${text} _`}</Text>
-        ) : (
-          <Box flexDirection="column" marginTop={1}>
-            {isModelStep ? (
+          {isKeyStep ? (
+            <Box flexDirection="column" marginTop={1}>
               <Text color={theme.faint}>
-                {loadingCatalog
-                  ? 'asking the provider for its catalogue…'
-                  : `${opts.length - 1} models${catalogLive ? ' (live)' : ' (built-in list)'}${
-                      query ? `  filter: ${query}` : ''
-                    }`}
+                {`Nothing is echoed back. The key is stored in ${KEY_FILE}, never in the repo.`}
               </Text>
-            ) : null}
-            {shown.map((opt, i) => {
-              const active = i + offset === cursor;
-              return (
-                <Box key={opt.value}>
-                  <Text color={active ? color : theme.faint} bold={active}>
-                    {active ? '❯ ' : '  '}
-                    {opt.label}
-                  </Text>
-                  {opt.hint ? <Text color={theme.dim}>{'   ' + opt.hint}</Text> : null}
+              <Text color={theme.bright}>
+                {`> ${text ? maskKey(text) : ''}${busy ? ' checking…' : ' _'}`}
+              </Text>
+              {error ? (
+                <Box marginTop={1}>
+                  <Text color={theme.blood}>{error}</Text>
                 </Box>
-              );
-            })}
-          </Box>
-        )}
-      </Box>
+              ) : null}
+            </Box>
+          ) : customMode ? (
+            <Text color={theme.bright}>{`> ${text} _`}</Text>
+          ) : (
+            <Box flexDirection="column" marginTop={1}>
+              {isModelStep ? (
+                <Text color={theme.faint}>
+                  {loadingCatalog
+                    ? 'asking the provider for its catalogue…'
+                    : `${opts.length - 1} models${catalogLive ? ' (live)' : ' (built-in list)'}${
+                        query ? `  filter: ${query}` : ''
+                      }`}
+                </Text>
+              ) : null}
+              {shown.map((opt, i) => {
+                const active = i + offset === cursor;
+                return (
+                  <Box key={opt.value}>
+                    <Box flexShrink={0}>
+                      <Text color={active ? color : theme.faint} bold={active}>
+                        {active ? '❯ ' : '  '}
+                        {opt.label}
+                      </Text>
+                    </Box>
+                    {opt.hint ? (
+                      <Text color={theme.dim} wrap="truncate-end">
+                        {'   ' + opt.hint}
+                      </Text>
+                    ) : null}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
 
-      <Box marginTop={1} paddingX={2} flexDirection="column">
-        <Text color={theme.dim}>
-          LEFT: {sel.leftProvider}/{sel.leftModel} [{sel.leftReasoning}]
-        </Text>
-        <Text color={theme.dim}>
-          RIGHT: {sel.rightProvider}/{sel.rightModel} [{sel.rightReasoning}]
-        </Text>
-        <Text color={theme.dim}>
-          sandbox: {sel.sandbox} · difficulty: {sel.difficulty}
-        </Text>
-        {saved ? <Text color={theme.win}>{saved}</Text> : null}
+          <Box marginTop={1} flexDirection="column">
+            <Text color={theme.dim}>
+              LEFT: {sel.leftProvider}/{sel.leftModel} [{sel.leftReasoning}]
+            </Text>
+            <Text color={theme.dim}>
+              RIGHT: {sel.rightProvider}/{sel.rightModel} [{sel.rightReasoning}]
+            </Text>
+            <Text color={theme.dim}>
+              sandbox: {sel.sandbox} · difficulty: {sel.difficulty}
+            </Text>
+            {saved ? <Text color={theme.win}>{saved}</Text> : null}
+          </Box>
+        </Box>
       </Box>
     </Box>
   );

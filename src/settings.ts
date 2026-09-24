@@ -13,6 +13,12 @@ export interface BattleSetting {
 
 export const SETTINGS: BattleSetting[] = [
   {
+    id: 'standard',
+    name: 'Standard Rules',
+    blurb: 'No flavour, no theatre. The setting every benchmark uses.',
+    flavor: 'This is a controlled contest between two AI agents. Follow the rules below exactly.',
+  },
+  {
     id: 'classic',
     name: 'The Classic Arena',
     blurb: 'Sand, sun, and a roaring crowd. A duel with no rules but one.',

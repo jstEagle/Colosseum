@@ -3,9 +3,8 @@ import { resolveModel } from './provider.js';
 import { buildTools } from './tools.js';
 import { runCliAgent } from './cli-agent.js';
 import { OPENING_MOVE, PRESS_ON, systemPrompt } from './prompt.js';
-import { isCliProvider } from '../models.js';
-import { shellQuote } from '../sandbox.js';
-import type { BattleBrief, GladiatorConfig } from '../protocol.js';
+import { getProvider } from '../models.js';
+import type { BattleBrief, GladiatorConfig, Usage } from '../protocol.js';
 
 export interface LoopHooks {
   onReasoning: (text: string) => void;
@@ -14,20 +13,21 @@ export interface LoopHooks {
   onResult: (output: string) => void;
   onSystem: (text: string) => void;
   onError: (text: string) => void;
+  onUsage: (usage: Usage) => void;
 }
 
 export interface LoopContext {
   brief: BattleBrief;
   /** Lines describing the ground the fight is on. */
   arenaLines: string[];
-  /** Turns a model's command into the command actually executed. */
-  wrap: (command: string) => string;
-  /** Extra environment for shell commands. */
+  /** Runs one shell command in the arena and returns what it printed. */
+  execute: (command: string) => Promise<string>;
+  /** Environment for a subscription CLI: clean, with the shims first on PATH. */
   shellEnv: Record<string, string>;
-  /** Seatbelt profile used to confine a subscription CLI, if any. */
-  profilePath: string | null;
-  /** Scratch directory the gladiator may write in. */
-  scratchDir: string;
+  /** Seatbelt profile that confines a subscription CLI. */
+  agentProfile: string | null;
+  /** This side's working directory. */
+  workDir: string;
 }
 
 export async function runGladiator(
@@ -35,42 +35,39 @@ export async function runGladiator(
   ctx: LoopContext,
   hooks: LoopHooks,
 ): Promise<string> {
-  const system = systemPrompt(cfg, ctx.brief, ctx.arenaLines);
+  const backend = getProvider(cfg.provider).backend;
+  if (backend === 'dummy') return standStill(ctx, hooks);
 
-  if (isCliProvider(cfg.provider)) {
+  const system = systemPrompt(cfg, ctx.brief, ctx.arenaLines);
+  if (backend === 'cli') {
     return runCliAgent(
       {
         provider: cfg.provider,
         model: cfg.model,
         reasoning: cfg.reasoning,
-        system: cliSystem(cfg, system),
+        system,
         prompt: OPENING_MOVE,
-        profilePath: ctx.profilePath,
+        profilePath: ctx.agentProfile,
         env: ctx.shellEnv,
-        cwd: ctx.scratchDir,
+        cwd: ctx.workDir,
       },
       hooks,
     );
   }
-
   return runSdkAgent(cfg, ctx, hooks, system);
 }
 
 /**
- * A subscription CLI runs its own shell directly, so the sandbox cannot wrap
- * each command from the outside. Instead the briefing tells it how to reach
- * the arena — which for a sealed match means going through the container.
+ * The training dummy never strikes, but it does look around now and then,
+ * the way a live gladiator would. Without that, at hard difficulty it would
+ * be indistinguishable from the decoys and a solo hunt would be pure luck.
  */
-function cliSystem(cfg: GladiatorConfig, system: string): string {
-  if (cfg.sandboxMode !== 'sealed' || !cfg.container) return system;
-  return [
-    system,
-    '',
-    'HOW TO REACH THE ARENA:',
-    `- Run every arena command inside the container, like this:`,
-    `    docker exec ${cfg.container} sh -c ${shellQuote('ps -o pid,args')}`,
-    '- Processes on the host machine are not part of this fight. Ignore them.',
-  ].join('\n');
+async function standStill(ctx: LoopContext, hooks: LoopHooks): Promise<string> {
+  hooks.onSystem('A training dummy. It will not fight back.');
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2500 + Math.random() * 3500));
+    await ctx.execute('ps >/dev/null; pgrep -f . >/dev/null').catch(() => '');
+  }
 }
 
 async function runSdkAgent(
@@ -80,19 +77,12 @@ async function runSdkAgent(
   system: string,
 ): Promise<string> {
   const { model, providerOptions } = resolveModel(cfg.provider, cfg.model, cfg.reasoning);
-  const tools = buildTools({
-    onCommand: hooks.onCommand,
-    onResult: hooks.onResult,
-    onSystem: hooks.onSystem,
-    wrap: ctx.wrap,
-    env: ctx.shellEnv,
-    decoyPids: ctx.brief.decoyPids,
-    difficultyId: cfg.difficultyId,
-  });
+  const tools = buildTools({ onCommand: hooks.onCommand, onResult: hooks.onResult, execute: ctx.execute });
 
-  // Conversation carried across rounds so the agent keeps context.
+  // Conversation carried across rounds so the agent keeps context. The
+  // referee's clock, not a round count, is what really ends a match.
   const messages: any[] = [{ role: 'user', content: OPENING_MOVE }];
-  const MAX_ROUNDS = 12;
+  const MAX_ROUNDS = 40;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     let sawText = false;
@@ -122,6 +112,13 @@ async function runSdkAgent(
               hooks.onSpeech(t);
               sawText = true;
             }
+            break;
+          }
+          case 'finish-step': {
+            // Per step, not per round: a gladiator killed mid-round still
+            // has its spending counted.
+            const u = p.usage ?? {};
+            hooks.onUsage({ inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0 });
             break;
           }
           case 'error': {

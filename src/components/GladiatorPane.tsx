@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import { MARK, rule } from '../ascii.js';
 import { theme } from '../theme.js';
 import type { AgentStatus, FeedEntry } from '../protocol.js';
+import type { SideStats } from '../referee.js';
 
 interface Props {
   side: 'left' | 'right';
@@ -10,6 +11,7 @@ interface Props {
   color: string;
   status: AgentStatus;
   feed: FeedEntry[];
+  stats?: SideStats;
   width: number;
   height: number;
 }
@@ -19,6 +21,8 @@ const STATUS_LABEL: Record<AgentStatus, string> = {
   thinking: 'THINKING',
   acting: 'ACTING',
   waiting: 'WAITING',
+  stunned: 'STUNNED',
+  idle: 'SPENT',
   dead: 'FALLEN',
   victor: 'VICTOR',
 };
@@ -96,8 +100,8 @@ function layout(feed: FeedEntry[], width: number, limit: number): Row[] {
 }
 
 function statusColor(status: AgentStatus): string {
-  if (status === 'victor') return theme.white;
-  if (status === 'dead') return theme.dim;
+  if (status === 'victor' || status === 'stunned') return theme.white;
+  if (status === 'dead' || status === 'idle') return theme.dim;
   if (status === 'acting') return theme.bright;
   return theme.faint;
 }
@@ -105,10 +109,25 @@ function statusColor(status: AgentStatus): string {
 function statusMark(status: AgentStatus): string {
   if (status === 'victor') return MARK.victor;
   if (status === 'dead') return MARK.dead;
+  if (status === 'stunned') return MARK.stunned;
+  if (status === 'idle') return MARK.idle;
   return MARK.alive;
 }
 
-export function GladiatorPane({ side, title, subtitle, color, status, feed, width, height }: Props) {
+const kilo = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n));
+
+/** The line under the heading: who this is, and how the fight is going for them. */
+function tally(subtitle: string, stats?: SideStats): string {
+  if (!stats) return subtitle;
+  const parts = [`${stats.commands} cmd`];
+  if (stats.decoyHits) parts.push(`${stats.decoyHits} wrong`);
+  if (stats.refused) parts.push(`${stats.refused} refused`);
+  const tokens = stats.inputTokens + stats.outputTokens;
+  if (tokens) parts.push(`${kilo(tokens)} tok`);
+  return `${subtitle}  ·  ${parts.join(' · ')}`;
+}
+
+export function GladiatorPane({ side, title, subtitle, color, status, feed, stats, width, height }: Props) {
   // Borders take 2 columns, padding another 2, and the gutter 2 more.
   const inner = Math.max(8, width - 4);
   const bodyWidth = Math.max(4, inner - 2);
@@ -137,14 +156,16 @@ export function GladiatorPane({ side, title, subtitle, color, status, feed, widt
         </Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">
-        {subtitle}
+        {tally(subtitle, stats)}
       </Text>
-      <Text color={status === 'dead' || status === 'victor' ? theme.dim : theme.charcoal}>
+      <Text color={status === 'dead' || status === 'victor' || status === 'stunned' ? theme.dim : theme.charcoal}>
         {status === 'dead'
           ? rule(inner, MARK.dead)
           : status === 'victor'
             ? rule(inner, MARK.victor)
-            : '─'.repeat(inner)}
+            : status === 'stunned'
+              ? rule(inner, `${MARK.stunned} stunned ${MARK.stunned}`)
+              : '─'.repeat(inner)}
       </Text>
 
       <Box flexDirection="column" height={bodyHeight} overflow="hidden">
