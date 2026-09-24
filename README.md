@@ -263,7 +263,13 @@ npm run dev      # run from source (tsx)
 npm test         # sandbox and UI tests (the sandbox tests need macOS)
 npm run build    # type-check and compile to dist/
 node scripts/render-art.mjs --preview   # regenerate the pictures
+npx tsx scripts/record-video.tsx <replay-id|latest> fight.mp4   # a 1080p video of a replay
 ```
+
+`record-video` plays a replay through the real app into a virtual terminal,
+draws each frame in headless Chrome (Braille as round dots, as a terminal
+draws it) and encodes an MP4 with ffmpeg — ready to post. It needs Google
+Chrome, ffmpeg and the network (for xterm.js and the font).
 
 The pictures are generated, not drawn: `scripts/render-art.mjs` crops each
 source in `assets/art/`, tone-maps it with an S-curve (masking the sky out of

@@ -40,6 +40,8 @@ export interface AppProps {
   preset?: BattleConfig;
   /** Open straight onto a replay. */
   replayId?: string;
+  /** Open a replay with the countdown, the way the fight itself began. */
+  intro?: boolean;
 }
 
 /** Where a replay is up to. Kept in a ref: it changes ten times a second. */
@@ -49,7 +51,7 @@ interface Playback {
   clock: number;
 }
 
-export function App({ preset, replayId }: AppProps) {
+export function App({ preset, replayId, intro }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const termRows = stdout?.rows ?? 30;
@@ -87,6 +89,9 @@ export function App({ preset, replayId }: AppProps) {
 
   // A series of fights at once, while it runs and after, for its charts.
   const [series, setSeries] = useState<Series | null>(null);
+
+  // A replay waiting for its countdown to finish.
+  const pendingReplay = useRef<string | null>(null);
 
   const refereeRef = useRef<Referee | null>(null);
   const startRef = useRef<number>(0);
@@ -202,7 +207,11 @@ export function App({ preset, replayId }: AppProps) {
   useEffect(() => {
     if (phase !== 'countdown') return;
     if (countdown < 0) {
-      launch();
+      if (pendingReplay.current) {
+        const id = pendingReplay.current;
+        pendingReplay.current = null;
+        startReplay(id);
+      } else launch();
       return;
     }
     const t = setTimeout(() => setCountdown((c) => c - 1), 800);
@@ -322,6 +331,16 @@ export function App({ preset, replayId }: AppProps) {
 
   // Straight from the command line.
   useEffect(() => {
+    if (replayId && intro) {
+      const replay = loadReplay(replayId);
+      if (replay) {
+        setConfig(replay.config);
+        pendingReplay.current = replay.id;
+        setCountdown(COUNT_FROM);
+        setPhase('countdown');
+        return;
+      }
+    }
     if (replayId) startReplay(replayId);
     else if (preset) handleComplete(preset);
     // eslint-disable-next-line react-hooks/exhaustive-deps

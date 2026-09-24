@@ -86,9 +86,11 @@ export const WORDMARK = 'C O L O S S E U M';
 
 /** A plain rule with a mark set into the middle, for section breaks. */
 export function rule(width: number, mark = '·'): string {
-  if (width < 5) return '─'.repeat(Math.max(0, width));
-  const side = Math.floor((width - 3) / 2);
-  return `${'─'.repeat(side)} ${mark} ${'─'.repeat(width - 3 - side)}`;
+  // The mark may be a word ("◌ stunned ◌"), not just a glyph: size around it.
+  const m = [...mark].length;
+  if (width < m + 4) return '─'.repeat(Math.max(0, width));
+  const side = Math.floor((width - m - 2) / 2);
+  return `${'─'.repeat(side)} ${mark} ${'─'.repeat(width - m - 2 - side)}`;
 }
 
 /** Gutter marks. In a monochrome arena these do the work colour used to. */

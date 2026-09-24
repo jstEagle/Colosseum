@@ -90,7 +90,7 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      return arena({ replayId: rest[0] ?? 'latest' });
+      return arena({ replayId: rest[0] ?? 'latest', intro: true });
     }
     case 'presets': {
       const { describeConfig, listPresets, PRESETS_FILE } = await import('./presets.js');
