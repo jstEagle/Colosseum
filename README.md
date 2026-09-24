@@ -119,10 +119,24 @@ What the guarded sandbox enforces, each tested end-to-end in `test/`:
 arena: HTTPS to their API and nothing else (no local sockets, so no Docker
 daemon), read access to their own sign-in and install and nothing else in your
 home, **no writes to your home at all** — so they cannot plant hooks or MCP
-servers in their own config — and exactly one tool, a shell. Your MCP servers,
-hooks, plugins and skills are not loaded. Under the sealed arena they reach the
+servers in their own config. Claude is limited to its Bash tool; Codex uses its
+native shell tools with browser, app, plugin and multi-agent features disabled.
+Your MCP servers, hooks, plugins and skills are not loaded. Under the sealed arena they reach the
 container through an `arena '<command>'` shim the referee executes. Because they
 rely on Seatbelt, subscription gladiators need macOS.
+
+Codex runs with a private, disposable home inside its corner. Only the ChatGPT
+login from `CODEX_HOME/auth.json` (normally `~/.codex/auth.json`) is copied;
+personal configuration, instructions and history are not imported. Runtime
+databases, logs and shell state stay in the corner and are removed with the
+match. Its configuration disables login shells and shell snapshots so `ps`,
+`kill` and the other arena commands keep reaching the referee. `default` uses
+Codex's built-in model default; select a model explicitly to override it.
+
+Use a current Codex CLI supporting `codex exec --json --ephemeral` and the
+`allow_login_shell` setting (verified with `0.155.0-alpha.16.4`). The subscription
+backend requires a file-based ChatGPT login, not an API-key login. If the setup
+screen asks for one, run `codex -c cli_auth_credentials_store='"file"' login`.
 
 The sealed arena needs a running Docker daemon; the image defaults to
 `alpine:3.20` and can be changed with `COLOSSEUM_IMAGE`.

@@ -206,8 +206,7 @@ export function seatbeltProfile(spec: ProfileSpec): string {
  * What a subscription CLI needs to read under $HOME: its sign-in state and
  * wherever it is installed. It gets nothing else, and it may write nowhere
  * in $HOME at all, so it cannot plant hooks or MCP servers in its own
- * config for next time. Codex is the exception: it refreshes its login and
- * keeps session logs, so those paths (and only those) stay writable.
+ * config for next time. Codex gets a private runtime home in its corner.
  */
 function cliHomeAccess(): { readable: string[]; writable: string[] } {
   const home = real(homedir());
@@ -215,7 +214,6 @@ function cliHomeAccess(): { readable: string[]; writable: string[] } {
     '.claude',
     '.claude.json',
     '.claude.json.backup',
-    '.codex',
     'Library/Keychains',
     '.local',
   ]);
@@ -228,7 +226,7 @@ function cliHomeAccess(): { readable: string[]; writable: string[] } {
   }
   return {
     readable: [...readable],
-    writable: ['.codex/sessions', '.codex/archived_sessions', '.codex/log', '.codex/auth.json'],
+    writable: [],
   };
 }
 
@@ -432,6 +430,8 @@ export class SideScratch {
       ZDOTDIR: this.zdotdir,
       SHELL: '/bin/bash',
       TMPDIR: join(this.dir, 'tmp'),
+      // Used by the runner to find the login before creating its private home.
+      CODEX_HOME: process.env.CODEX_HOME,
     });
   }
 }

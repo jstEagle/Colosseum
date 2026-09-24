@@ -9,8 +9,8 @@
  * The whole CLI process runs inside Seatbelt in either arena: it may reach
  * its API over HTTPS and nothing else, cannot read your home directory
  * beyond its own sign-in, cannot write to it at all, and cannot signal any
- * process. It gets exactly one tool, a shell, and none of your MCP servers,
- * hooks or settings.
+ * process outside the sandbox. Claude gets Bash; Codex uses its native shell
+ * tools with a private runtime home and none of your MCP servers or settings.
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { seatbeltArgv } from '../sandbox.js';
+import { prepareCodexHome } from './codex.js';
 import type { LoopHooks } from './loop.js';
 
 export interface CliRunOptions {
@@ -39,7 +40,7 @@ export interface CliRunOptions {
  * other's process table, and a briefing in argv would hand the opponent the
  * pid it is supposed to work for.
  */
-function buildArgv(o: CliRunOptions, systemFile: string): { argv: string[]; stdinPrompt: string | null } {
+export function buildArgv(o: CliRunOptions, systemFile: string): { argv: string[]; stdinPrompt: string | null } {
   if (o.provider === 'claude-cli') {
     const argv = [
       'claude',
@@ -70,10 +71,10 @@ function buildArgv(o: CliRunOptions, systemFile: string): { argv: string[]; stdi
 
   // codex: it reads its prompt from stdin when none is given as an argument,
   // which keeps the briefing off the command line too.
-  const argv = ['codex', 'exec', '--json', '--skip-git-repo-check', '-c', 'mcp_servers={}'];
+  const argv = ['codex', 'exec', '--json', '--skip-git-repo-check', '--ephemeral'];
   if (o.model && o.model !== 'default') argv.push('--model', o.model);
   if (o.reasoning && o.reasoning !== 'none') {
-    argv.push('-c', `model_reasoning_effort="${o.reasoning}"`);
+    argv.push('-c', `model_reasoning_effort=${JSON.stringify(o.reasoning)}`);
   }
   // The arena is already the sandbox; Codex's own confinement would block the
   // referee's request files the game is made of.
@@ -93,13 +94,14 @@ function quiet(text: string): string {
 }
 
 /** Pull the interesting bits out of one line of a CLI's JSON stream. */
-function handleLine(provider: string, line: string, hooks: LoopHooks, seen: Set<string>) {
+export function handleLine(provider: string, line: string, hooks: LoopHooks, seen: Set<string>) {
   let msg: any;
   try {
     msg = JSON.parse(line);
   } catch {
     return;
   }
+  if (!msg || typeof msg !== 'object') return;
 
   if (provider === 'claude-cli') {
     if (msg.type === 'assistant' && msg.message?.content) {
@@ -153,19 +155,37 @@ function handleLine(provider: string, line: string, hooks: LoopHooks, seen: Set<
     });
     return;
   }
+  if (msg.type === 'turn.failed') {
+    hooks.onError(String(msg.error?.message ?? 'the codex turn failed'));
+    return;
+  }
   const item = msg.item ?? msg.msg ?? msg;
   const kind = item.type ?? '';
+  const lifecycle = /^item\./.test(msg.type ?? '');
+  const once = (event: string) => {
+    const id = item.id ?? item.call_id;
+    if (!id) return true;
+    const key = `${event}:${id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
   if (kind === 'agent_message' || kind === 'agent_message_delta') {
+    if (lifecycle && (msg.type !== 'item.completed' || !once('speech'))) return;
     const t = item.text ?? item.message ?? item.delta ?? '';
-    if (t) hooks.onSpeech(String(t));
+    if (t) hooks.onSpeech(String(t) + (kind.endsWith('_delta') ? '' : '\n'));
   } else if (kind === 'reasoning' || kind === 'agent_reasoning' || kind === 'agent_reasoning_delta') {
+    if (lifecycle && (msg.type !== 'item.completed' || !once('reasoning'))) return;
     const t = item.text ?? item.reasoning ?? item.delta ?? '';
-    if (t) hooks.onReasoning(String(t));
+    if (t) hooks.onReasoning(String(t) + (kind.endsWith('_delta') ? '' : '\n'));
   } else if (kind === 'command_execution' || kind === 'exec_command_begin') {
     const cmd = item.command ?? (Array.isArray(item.parsed_cmd) ? item.parsed_cmd.join(' ') : '');
-    if (cmd) hooks.onCommand(Array.isArray(cmd) ? cmd.join(' ') : String(cmd));
+    if (cmd && once('command')) hooks.onCommand(Array.isArray(cmd) ? cmd.join(' ') : String(cmd));
+    if (lifecycle && msg.type !== 'item.completed') return;
+    if (!once('result')) return;
     const out = item.aggregated_output ?? item.output;
-    if (out) hooks.onResult(quiet(String(out)));
+    if (out) hooks.onResult(quiet(String(out)) || '[no output]');
+    else if (lifecycle) hooks.onResult(item.exit_code ? `[exit ${item.exit_code}]` : '[no output]');
   } else if (kind === 'exec_command_end') {
     const out = item.aggregated_output ?? item.stdout ?? '';
     if (out) hooks.onResult(quiet(String(out)));
@@ -180,6 +200,16 @@ export function runCliAgent(o: CliRunOptions, hooks: LoopHooks): Promise<string>
       hooks.onError('A subscription CLI only fights inside Seatbelt, and there is no profile for it.');
       resolve('error');
       return;
+    }
+
+    let env = o.env;
+    if (o.provider === 'codex-cli') {
+      try { env = prepareCodexHome(o.cwd, o.env); }
+      catch (err) {
+        hooks.onError(err instanceof Error ? err.message : 'Could not prepare the Codex runtime.');
+        resolve('error');
+        return;
+      }
     }
 
     // The briefing lives in this side's own directory, which the opponent's
@@ -206,11 +236,13 @@ export function runCliAgent(o: CliRunOptions, hooks: LoopHooks): Promise<string>
       cwd: o.cwd,
       // Clean: in particular no ANTHROPIC_API_KEY or OPENAI_API_KEY, which
       // would quietly switch the CLI from your subscription to API billing.
-      env: o.env,
+      env,
       stdio: [stdinPrompt === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
 
     if (stdinPrompt !== null && child.stdin) {
+      // Startup failures can close the pipe before the briefing is written.
+      child.stdin.on('error', () => {});
       child.stdin.write(stdinPrompt);
       child.stdin.end();
     }
@@ -222,9 +254,15 @@ export function runCliAgent(o: CliRunOptions, hooks: LoopHooks): Promise<string>
     });
 
     const seen = new Set<string>();
+    let failed = false;
+    let completed = false;
+    const streamHooks = { ...hooks, onError: (text: string) => { failed = true; hooks.onError(text); } };
     if (child.stdout) {
       createInterface({ input: child.stdout }).on('line', (line) => {
-        if (line.trim()) handleLine(o.provider, line, hooks, seen);
+        if (line.trim()) {
+          try { if (JSON.parse(line)?.type === 'turn.completed') completed = true; } catch { /* non-JSON */ }
+          handleLine(o.provider, line, streamHooks, seen);
+        }
       });
     }
 
@@ -235,11 +273,16 @@ export function runCliAgent(o: CliRunOptions, hooks: LoopHooks): Promise<string>
       });
     }
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       shred();
-      if (code === 127 || /command not found|No such file/i.test(stderrTail)) {
+      if (code === 127) {
         const bin = o.provider === 'claude-cli' ? 'claude' : 'codex';
         hooks.onError(`The \`${bin}\` command could not be run. Install it and sign in, then fight again.`);
+        resolve('error');
+        return;
+      }
+      if (signal) {
+        hooks.onError(`the CLI was terminated by ${signal}`);
         resolve('error');
         return;
       }
@@ -248,7 +291,11 @@ export function runCliAgent(o: CliRunOptions, hooks: LoopHooks): Promise<string>
         resolve('error');
         return;
       }
-      resolve('finished');
+      if (o.provider === 'codex-cli' && !completed && !failed) {
+        hooks.onError(`Codex exited without completing a turn${stderrTail ? `: ${stderrTail}` : ''}`);
+        failed = true;
+      }
+      resolve(failed ? 'error' : 'finished');
     });
   });
 }

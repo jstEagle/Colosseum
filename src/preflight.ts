@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProvider } from './models.js';
+import { readCodexAuth } from './agent/codex.js';
 import { getSandbox, seatbeltAvailable, type SandboxMode } from './sandbox.js';
 
 const binCache = new Map<string, boolean>();
@@ -32,7 +33,12 @@ function cliSignedIn(providerId: string): boolean {
     return existsSync(join(home, '.claude')) || existsSync(join(home, '.claude.json'));
   }
   if (providerId === 'codex-cli') {
-    return existsSync(join(home, '.codex', 'auth.json'));
+    try {
+      readCodexAuth();
+      return true;
+    } catch {
+      return false;
+    }
   }
   return true;
 }
@@ -50,7 +56,14 @@ export function providerState(providerId: string): ProviderState {
   if (p.backend === 'cli') {
     if (!seatbeltAvailable()) return { ready: false, hint: 'subscription CLIs are confined by Seatbelt: macOS only' };
     if (!hasBinary(p.bin!)) return { ready: false, hint: `install the \`${p.bin}\` CLI` };
-    if (!cliSignedIn(p.id)) return { ready: false, hint: `run \`${p.bin}\` once and sign in` };
+    if (!cliSignedIn(p.id)) {
+      return {
+        ready: false,
+        hint: p.id === 'codex-cli'
+          ? 'run `codex -c cli_auth_credentials_store="file" login` with ChatGPT'
+          : `run \`${p.bin}\` once and sign in`,
+      };
+    }
     return { ready: true, hint: 'signed in — no API key needed' };
   }
 
