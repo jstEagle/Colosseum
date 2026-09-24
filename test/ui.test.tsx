@@ -21,3 +21,35 @@ test('a picture keeps its grey escapes and fits the space it is given', () => {
 test('no rendering at all when nothing fits', () => {
   assert.equal(fitPicture('colosseum', 20, 5), null);
 });
+
+test('the standing statue is always on the victor’s side', async () => {
+  const { Result } = await import('../src/components/Result.js');
+  const column = (frame: string, label: RegExp) =>
+    stripAnsi(frame)
+      .split('\n')
+      .map((l) => l.search(label))
+      .find((i) => i >= 0) ?? -1;
+  for (const winner of ['left', 'right'] as const) {
+    const loser = winner === 'left' ? 'right' : 'left';
+    const { lastFrame, unmount } = render(
+      <Result
+        outcome={{ kind: 'winner', winner, loser, finish: 'kill', reason: 'test' }}
+        record={null}
+        heralds={[]}
+        titles={{ left: 'model-a', right: 'model-b' }}
+        ledger={null}
+        replayed={false}
+        naming={null}
+        notice=""
+        rows={50}
+        cols={100}
+      />,
+    );
+    const frame = lastFrame()!;
+    const victor = column(frame, /·\s+victor/);
+    const fallen = column(frame, /·\s+fallen/);
+    assert.ok(victor >= 0 && fallen >= 0, frame);
+    assert.equal(victor < fallen, winner === 'left', `${winner} won, but the victor stands on the other side`);
+    unmount();
+  }
+});

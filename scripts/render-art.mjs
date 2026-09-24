@@ -75,7 +75,7 @@ async function render(name, spec, size) {
   const rows = size.rows ?? Math.round(cols / aspect / 2);
   const w = cols * 2;
   const h = rows * 4;
-  const raw = await loadGrey(src, { crop: spec.crop, dotsW: w, dotsH: h, sharpen: 1.6 });
+  const raw = await loadGrey(src, { crop: spec.crop, dotsW: w, dotsH: h, sharpen: 1.6, mirror: spec.mirror });
   const t = spec.process(tone(raw, { low: 0.01, high: 0.99, ...spec.tone }), w, h);
   const bits = dither(t.map((v) => v ** spec.ditherGamma), w, h, { method: 'atkinson' });
   const cells = braille(bits, t.map((v) => v ** (spec.greyGamma ?? 1)), w, h, { floor: spec.floor });
@@ -85,6 +85,10 @@ async function render(name, spec, size) {
   }
   return { cols, rows, lines: ansiRows(cells) };
 }
+
+// Mirrored statues, so on the verdict screen both always face the centre.
+PICTURES.borgheseMirrored = { ...PICTURES.borghese, mirror: true };
+PICTURES.gaulMirrored = { ...PICTURES.gaul, mirror: true };
 
 const out = {};
 for (const [name, spec] of Object.entries(PICTURES)) {

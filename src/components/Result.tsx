@@ -136,8 +136,30 @@ export function Result({ outcome, record, heralds, titles, ledger, replayed, nam
   // equally, so the wreath sits dead centre between them.
   const centre = 48;
   const col = Math.floor((width - centre) / 2);
-  const victor = !draw ? fitPicture('borghese', col - 2, picRows) : null;
-  const fallen = !draw ? fitPicture('gaul', col - 2, Math.min(picRows, 14)) : null;
+  const fallenRows = Math.min(picRows, 14);
+
+  const victorColumn = (art: 'borghese' | 'borgheseMirrored') => (
+    <Box width={col} flexDirection="column" alignItems="center">
+      {fitPicture(art, col - 2, picRows) ? <Picture name={art} maxCols={col - 2} maxRows={picRows} /> : null}
+      <Text color={theme.white} bold>{`${MARK.victor}  ${winner!.toUpperCase()}  ·  victor`}</Text>
+    </Box>
+  );
+  const fallenColumn = (art: 'gaul' | 'gaulMirrored') => (
+    <Box width={col} flexDirection="column" alignItems="center">
+      {fitPicture(art, col - 2, fallenRows) ? <Picture name={art} maxCols={col - 2} maxRows={fallenRows} /> : null}
+      <Text color={theme.dim}>{`${MARK.dead}  ${loser!.toUpperCase()}  ·  fallen`}</Text>
+    </Box>
+  );
+  const crown = (
+    <Box width={centre} flexDirection="column" alignItems="center" marginBottom={1}>
+      <Art art={LAUREL} from={4} to={2} />
+      <Text color={theme.white} bold>
+        {'V I C T O R'}
+      </Text>
+      <Text color={theme.bright}>{winner ? titles[winner] : ''}</Text>
+      <Art art={LAUREL_LOWER} from={2} to={4} />
+    </Box>
+  );
 
   return (
     <Box flexDirection="column" alignItems="center" width={cols} height={rows}>
@@ -158,22 +180,21 @@ export function Result({ outcome, record, heralds, titles, ledger, replayed, nam
         </Box>
       ) : (
         <Box width={width} alignItems="flex-end" marginY={1}>
-          <Box width={col} flexDirection="column" alignItems="center">
-            {victor ? <Picture name="borghese" maxCols={col - 2} maxRows={picRows} /> : null}
-            <Text color={theme.white} bold>{`${MARK.victor}  ${winner!.toUpperCase()}  ·  victor`}</Text>
-          </Box>
-          <Box width={centre} flexDirection="column" alignItems="center" marginBottom={1}>
-            <Art art={LAUREL} from={4} to={2} />
-            <Text color={theme.white} bold>
-              {'V I C T O R'}
-            </Text>
-            <Text color={theme.bright}>{titles[winner!]}</Text>
-            <Art art={LAUREL_LOWER} from={2} to={4} />
-          </Box>
-          <Box width={col} flexDirection="column" alignItems="center">
-            {fallen ? <Picture name="gaul" maxCols={col - 2} maxRows={Math.min(picRows, 14)} /> : null}
-            <Text color={theme.dim}>{`${MARK.dead}  ${loser!.toUpperCase()}  ·  fallen`}</Text>
-          </Box>
+          {/* The standing statue is always on the victor's side, and both
+              statues face the wreath between them. */}
+          {winner === 'left' ? (
+            <>
+              {victorColumn('borghese')}
+              {crown}
+              {fallenColumn('gaul')}
+            </>
+          ) : (
+            <>
+              {fallenColumn('gaulMirrored')}
+              {crown}
+              {victorColumn('borgheseMirrored')}
+            </>
+          )}
         </Box>
       )}
 

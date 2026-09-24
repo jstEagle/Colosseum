@@ -16,7 +16,7 @@ import sharp from 'sharp';
  * Load an image as greyscale floats in [0, 1], `dotsW` × `dotsH` in size.
  * `crop` is a fractional rectangle { left, top, width, height } of the source.
  */
-export async function loadGrey(path, { crop, dotsW, dotsH, sharpen = 1.2, channel = 'luma' }) {
+export async function loadGrey(path, { crop, dotsW, dotsH, sharpen = 1.2, channel = 'luma', mirror = false }) {
   // A painting's gold and red can share a luminance; its green channel
   // tells gilded armour from a red wall where plain greyscale cannot.
   let img = channel === 'luma' ? sharp(path).greyscale() : sharp(path).extractChannel(channel);
@@ -29,6 +29,7 @@ export async function loadGrey(path, { crop, dotsW, dotsH, sharpen = 1.2, channe
       height: Math.round(crop.height * meta.height),
     });
   }
+  if (mirror) img = img.flop();
   // Resize in two steps: a clean area-average down to the dot grid, then
   // sharpen at that size, where the arches actually have to survive.
   const buf = await img
