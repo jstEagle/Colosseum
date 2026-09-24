@@ -22,7 +22,8 @@ interface Option {
 }
 
 interface Props {
-  onComplete: (cfg: BattleConfig) => void;
+  /** A match to fight: `count` of them at once when more than one. */
+  onComplete: (cfg: BattleConfig, count?: number) => void;
   /** Open the hall of champions. */
   onHall: () => void;
   /** Watch a recorded match again. */
@@ -51,7 +52,8 @@ type StepKey =
   | 'rightReasoning'
   | 'sandbox'
   | 'difficulty'
-  | 'setting';
+  | 'setting'
+  | 'count';
 
 /** Canonical order. Which of these are actually shown depends on choices. */
 const ORDER: StepKey[] = [
@@ -68,6 +70,7 @@ const ORDER: StepKey[] = [
   'sandbox',
   'difficulty',
   'setting',
+  'count',
 ];
 
 const CUSTOM = '__custom__';
@@ -100,6 +103,7 @@ const HELP: Record<StepKey, (side: string) => string> = {
   sandbox: () => 'Where the fight happens. Either way the models are confined; sealed keeps them off your machine entirely.',
   difficulty: () => 'How hard it is to find the enemy among the decoys. Hard is where models really differ.',
   setting: () => 'The flavour of the briefing. Standard Rules is neutral; the others change the mood, not the rules.',
+  count: () => 'One fight to watch, or many at once to find out which of the two is stronger — with charts at the end.',
 };
 
 /** The values a fixed-choice step offers, to put the cursor on the current one. */
@@ -117,6 +121,8 @@ function optionValues(key: StepKey, _sel: Selection): string[] {
       return DIFFICULTIES.map((d) => d.id);
     case 'setting':
       return SETTINGS.map((s) => s.id);
+    case 'count':
+      return COUNTS.map(([n]) => n);
     default:
       return [];
   }
@@ -140,6 +146,7 @@ function initialSelection(): Selection {
       sandbox: defaultSandbox(),
       difficulty: 'normal',
       setting: 'classic',
+      count: '1',
     };
   }
   return {
@@ -156,8 +163,18 @@ function initialSelection(): Selection {
     sandbox: last.sandbox,
     difficulty: last.difficultyId,
     setting: last.settingId,
+    count: '1',
   };
 }
+
+/** How many fights: one to watch, or a series to measure. */
+const COUNTS: [string, string, string][] = [
+  ['1', 'One fight', 'watch it live, blow by blow'],
+  ['3', 'A series of 3', 'all at once — a quick feel'],
+  ['5', 'A series of 5', 'all at once'],
+  ['10', 'A series of 10', 'all at once — enough to see a gap'],
+  ['20', 'A series of 20', 'eight at a time — enough to trust it'],
+];
 
 const PRESET = 'preset:';
 const REPLAY = 'replay:';
@@ -286,6 +303,8 @@ export function Setup({ onComplete, onHall, onReplay, onQuit, providerHint, rows
         return DIFFICULTIES.map((d) => ({ value: d.id, label: d.name, hint: d.blurb }));
       case 'setting':
         return SETTINGS.map((s) => ({ value: s.id, label: s.name, hint: s.blurb }));
+      case 'count':
+        return COUNTS.map(([n, label, hint]) => ({ value: n, label, hint }));
       default:
         return [];
     }
@@ -323,6 +342,8 @@ export function Setup({ onComplete, onHall, onReplay, onQuit, providerHint, rows
         return 'THE MATCH  ·  DIFFICULTY';
       case 'setting':
         return 'THE MATCH  ·  ARENA';
+      case 'count':
+        return 'THE MATCH  ·  HOW MANY FIGHTS';
     }
   };
 
@@ -341,7 +362,7 @@ export function Setup({ onComplete, onHall, onReplay, onQuit, providerHint, rows
       settingId: next.setting,
       difficultyId: next.difficulty,
       sandbox: next.sandbox as SandboxMode,
-    });
+    }, Number(next.count) || 1);
   };
 
   const goto = (key: StepKey, current: Selection = sel) => {
@@ -388,11 +409,12 @@ export function Setup({ onComplete, onHall, onReplay, onQuit, providerHint, rows
       return;
     }
     const next: Selection = { ...sel, [stepKey]: value };
-    if (stepKey === 'leftProvider') {
+    // A new provider needs a new model; keeping the same one keeps its model.
+    if (stepKey === 'leftProvider' && value !== sel.leftProvider) {
       next.leftModel = defaultModel(value);
       if (!getProvider(value).supportsReasoning) next.leftReasoning = 'none';
     }
-    if (stepKey === 'rightProvider') {
+    if (stepKey === 'rightProvider' && value !== sel.rightProvider) {
       next.rightModel = defaultModel(value);
       if (!getProvider(value).supportsReasoning) next.rightReasoning = 'none';
     }
@@ -724,6 +746,7 @@ function MatchLine({ sel, stepKey }: { sel: Selection; stepKey: StepKey }) {
     ['sandbox', 'sandbox', sel.sandbox],
     ['difficulty', 'difficulty', getDifficulty(sel.difficulty).id],
     ['setting', 'arena', SETTINGS.find((x) => x.id === sel.setting)?.name ?? sel.setting],
+    ['count', 'fights', sel.count],
   ];
   return (
     <Box justifyContent="center">

@@ -690,7 +690,8 @@ export class Referee extends EventEmitter {
 
     if (this.scratch) {
       const refresh = async () => {
-        const table = await this.arena!.processTable();
+        const roots = [...SIDES.map((s) => this.glads[s]?.child.pid ?? 0), ...this.decoyPids].filter(Boolean);
+        const table = await this.arena!.processTable(roots);
         this.scratch?.writePsSnapshot(sanitize(table));
       };
       void refresh();
@@ -787,6 +788,9 @@ export class Referee extends EventEmitter {
   }
 
   cleanup() {
+    // Anything that dies from here on is the arena being cleared, not a
+    // result: without this, quitting mid-fight recorded a "collapse".
+    this.settled = true;
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
     for (const side of SIDES) {

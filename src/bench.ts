@@ -21,6 +21,7 @@ import { blockers } from './preflight.js';
 import { LEDGER, VERSION, appendMatch, readLedger } from './results.js';
 import { displayName, gladiatorKey, standings, type Standing } from './ratings.js';
 import type { SandboxMode } from './sandbox.js';
+import { Series, summarize, summaryRows, slotOf, type Tone } from './series.js';
 
 /* ------------------------------------------------------------- styling -- */
 
@@ -319,5 +320,126 @@ export async function leaderboardCommand(argv: string[]): Promise<number> {
     (values['all-versions'] ? 'every match on record' : `every match under v${VERSION} rules`);
   process.stdout.write(`\n  ${white(bold('C O L O S S E U M'))}  ${mid('hall of champions')}\n\n`);
   printStandings(ledger, `${scope}  ${dim(`(${ledger.length} matches)`)}`);
+  return 0;
+}
+
+/* --------------------------------------------------------------- series -- */
+
+const TONE: Record<Tone, (s: string) => string> = {
+  white: white,
+  bright: light,
+  text: grey(252),
+  muted: mid,
+  faint: grey(243),
+  dim: dim,
+  ghost: faint,
+};
+
+const SERIES_USAGE = `${bold('colosseum series')} — fight the same matchup many times at once
+
+  colosseum series -g <A> -g <B> [-n 10] [options]
+
+  Slot A and slot B swap sides every other fight, so the seat cancels out.
+  Every fight is recorded, and can be watched again with  colosseum replay .
+
+Options
+  -g, --gladiator <spec>    exactly two: provider:model[@reasoning]
+  -n, --count <n>           how many fights (default 10)
+  -p, --parallel <n>        at once (default: all, at most 8)
+  -d, --difficulty <id>     ${DIFFICULTIES.map((d) => d.id).join(', ')} (default: normal)
+      --sandbox <mode>      guarded or sealed (default: guarded)
+      --time-limit <secs>   per fight (default: ${DEFAULT_TIME_LIMIT_MS / 1000})
+      --setting <id>        arena flavour (default: standard)
+      --no-swap             keep A on the left every time
+`;
+
+export async function seriesCommand(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      gladiator: { type: 'string', short: 'g', multiple: true },
+      count: { type: 'string', short: 'n', default: '10' },
+      parallel: { type: 'string', short: 'p' },
+      difficulty: { type: 'string', short: 'd', default: 'normal' },
+      sandbox: { type: 'string', default: 'guarded' },
+      'time-limit': { type: 'string', default: String(DEFAULT_TIME_LIMIT_MS / 1000) },
+      setting: { type: 'string', default: 'standard' },
+      'no-swap': { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+  });
+  const specs = (values.gladiator ?? []).flatMap((g) => g.split(',')).map((s) => s.trim()).filter(Boolean);
+  if (values.help || specs.length !== 2) {
+    process.stdout.write(SERIES_USAGE);
+    return values.help ? 0 : 1;
+  }
+  let a: SideConfig, b: SideConfig;
+  try {
+    [a, b] = specs.map(parseGladiator);
+  } catch (err: any) {
+    process.stderr.write(`colosseum series: ${err.message}\n`);
+    return 1;
+  }
+  const difficultyId = values.difficulty!;
+  if (getDifficulty(difficultyId).id !== difficultyId) {
+    process.stderr.write(`colosseum series: unknown difficulty "${difficultyId}"\n`);
+    return 1;
+  }
+  const sandbox = values.sandbox as SandboxMode;
+  const missing = blockers([a.provider, b.provider], sandbox);
+  if (missing.length) {
+    process.stderr.write(`colosseum series: not ready to fight\n${missing.map((m) => `  ${m}\n`).join('')}`);
+    return 1;
+  }
+  const count = Math.max(1, Number(values.count) || 10);
+  const parallel = Math.max(1, Number(values.parallel) || Math.min(count, 8));
+  const timeLimitMs = Math.max(10, Number(values['time-limit']) || 180) * 1000;
+  const config: BattleConfig = { left: a, right: b, settingId: values.setting!, difficultyId, sandbox, timeLimitMs };
+  const series = new Series({ config, count, parallel, swap: !values['no-swap'] });
+
+  process.stdout.write(
+    `\n  ${white(bold('C O L O S S E U M'))}  ${mid('series')}  ${dim(series.id)}\n` +
+      `  ${light(`A  ${displayName(gladiatorKey(a))}`)}  ${dim('vs')}  ${light(`B  ${displayName(gladiatorKey(b))}`)}\n` +
+      `  ${dim(`${count} fights · ${parallel} at once · ${difficultyId} · ${sandbox}${values['no-swap'] ? '' : ' · sides swap'}`)}\n\n`,
+  );
+
+  let reported = 0;
+  series.on('update', () => {
+    for (const f of series.fights) {
+      if (f.state !== 'done' || f.index < reported) continue;
+      if (f.index !== reported) break;
+      reported++;
+      const o = f.record!.outcome;
+      const who = o.kind === 'winner' ? slotOf(f, o.winner) : null;
+      process.stdout.write(
+        `  ${dim(lpad(`${f.index + 1}/${count}`, 7))}  ${who ? white(bold(`${who} wins`)) : mid('draw   ')}` +
+          `  ${dim(`${o.finish} · ${secs(f.record!.durationMs)} · A sat ${f.leftSlot === 'A' ? 'left' : 'right'}`)}\n`,
+      );
+    }
+  });
+  let interrupted = false;
+  process.once('SIGINT', () => {
+    interrupted = true;
+    series.stop();
+  });
+  await new Promise<void>((resolve) => {
+    series.on('done', resolve);
+    const poll = setInterval(() => {
+      if (interrupted) {
+        clearInterval(poll);
+        resolve();
+      }
+    }, 200);
+    series.on('done', () => clearInterval(poll));
+    series.start();
+  });
+
+  const width = Math.min(process.stdout.columns ?? 100, 110) - 4;
+  const rows = summaryRows(summarize(series.fights, config), width, timeLimitMs);
+  process.stdout.write('\n');
+  for (const row of rows) {
+    process.stdout.write('  ' + row.map(([text, tone, b]) => (b ? bold(TONE[tone](text)) : TONE[tone](text))).join('') + '\n');
+  }
+  process.stdout.write(`\n  ${dim(`recorded in ${LEDGER} as ${series.id} · watch any fight with  colosseum replay`)}\n\n`);
   return 0;
 }

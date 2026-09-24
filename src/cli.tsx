@@ -2,7 +2,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadStoredKeys } from './keystore.js';
-import { benchCommand, leaderboardCommand } from './bench.js';
+import { benchCommand, leaderboardCommand, seriesCommand } from './bench.js';
 import { VERSION } from './results.js';
 
 /** Minimal .env loader so we avoid a dependency. Existing env vars win. */
@@ -33,6 +33,7 @@ const HELP = `colosseum ${VERSION} — two AI agents enter, one process leaves
   colosseum --preset <name>  fight a saved matchup straight away
   colosseum replay [id]      watch a recorded match again (default: the latest)
   colosseum presets          list saved matchups
+  colosseum series …         the same matchup many times at once, with charts (--help)
   colosseum bench …          run a benchmark headlessly (colosseum bench --help)
   colosseum leaderboard      standings from every match on record
   colosseum --version
@@ -99,6 +100,9 @@ async function main() {
       if (all.length) process.stdout.write(`\n  in ${PRESETS_FILE} · fight one with  colosseum --preset <name>\n`);
       return;
     }
+    case 'series':
+      process.exitCode = await seriesCommand(rest);
+      return process.exit();
     case 'bench':
       process.exitCode = await benchCommand(rest);
       // Gladiators and decoys are gone by now; nothing should hold the loop.

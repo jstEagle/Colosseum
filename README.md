@@ -86,6 +86,7 @@ as `io-worker`, and a win after the opponent struck a shade.
 colosseum --preset "bunny ladder"   # fight a saved matchup straight away
 colosseum replay                    # watch the latest match again
 colosseum presets                   # list saved matchups
+colosseum series -g A -g B -n 10    # many fights at once, with charts
 ```
 
 ## Security
@@ -144,6 +145,27 @@ On hard the bodies run under innocuous names like `metrics-agent` or
 CPU and run a sandboxed `ps` or `pgrep`, wrapped exactly as a gladiator's own
 commands are. Activity alone gives nobody away; a gladiator has to read what
 each process is actually doing, and watch it over time.
+
+## Series: many fights at once
+
+Want a quick answer to "which of these two is stronger"? Choose **a series**
+at the last step of setup — 3, 5, 10 or 20 fights — and they all run at once,
+each in its own sandbox, the two gladiators swapping sides every other fight
+so the seat cancels out. A grid of tiles shows every fight live; when the last
+one ends you get the verdict and the charts:
+
+- **win share** for each gladiator, with its 95% (Wilson) interval,
+- an exact **binomial test** saying whether the gap is real or could be luck,
+- **fight by fight**, in order,
+- **kill times** for each side on one axis, with the median marked,
+- the tally: first blows, wrong blows, feints, self-strikes, tokens and cost.
+
+Every fight is recorded, so **w** opens any one of them as a replay. Headless:
+
+```bash
+colosseum series -g openrouter:stealth/space-bunny-alpha@low \
+                 -g openrouter:stealth/space-bunny-alpha@high -n 10 -d hard
+```
 
 ## Benchmark
 
@@ -232,6 +254,7 @@ each provider's native control.
 - **v** compact / full output — compact trims long command output and older thoughts (arena, replay)
 - **r** rematch · **n** new match · **s** save as preset · **a** the arena transcript · **l** hall of champions · **q** quit (verdict)
 - **space** pause · **← →** speed · **s** skip · **esc** leave (replay)
+- **w** watch a fight · **r** run the series again · **esc** stop a running series (series)
 
 ## Development
 
@@ -262,6 +285,7 @@ src/
   presets.ts         saved matchups and the last one fought
   replays.ts         recorded matches, for watching again
   intent.ts          what a gladiator is doing, in words
+  series.ts          many fights at once: scheduling, statistics, charts
   difficulty.ts      the three difficulty levels, seeded layouts
   protocol.ts        events, the battle brief, output sanitising
   art.generated.ts   the dithered pictures (generated)

@@ -44,8 +44,11 @@ export interface Arena {
   signal(pid: number, signal: string): Promise<SignalResult>;
   /** Run a model's command in the arena (sealed only). */
   exec(command: string, timeoutMs: number): Promise<ExecResult>;
-  /** The match's slice of the process table, for the sandboxed `ps`. */
-  processTable(): Promise<string>;
+  /**
+   * The match's slice of the process table, for the sandboxed `ps`: the
+   * given roots (bodies, decoys) and everything beneath them.
+   */
+  processTable(roots: number[]): Promise<string>;
   /** How the gladiators should be told to look around. */
   briefing(): string[];
   teardown(): Promise<void>;
@@ -185,11 +188,11 @@ export class HostArena implements Arena {
   }
 
   /**
-   * Only the referee's own descendants: the bodies, the decoys and whatever
-   * the gladiators are running. The rest of your machine is none of their
-   * business, and would only waste their context.
+   * Only this match: its bodies, its decoys and whatever the gladiators are
+   * running. The rest of your machine is none of their business — nor is any
+   * other match fought from the same process, as in a series.
    */
-  async processTable(): Promise<string> {
+  async processTable(roots: number[]): Promise<string> {
     let stdout = '';
     try {
       // CPU columns on purpose: a gladiator that is thinking burns CPU and a
@@ -208,7 +211,7 @@ export class HostArena implements Arena {
       })
       .filter((r): r is { pid: number; ppid: number; line: string } => r !== null);
 
-    const inMatch = new Set<number>([process.pid]);
+    const inMatch = new Set<number>(roots);
     let grew = true;
     while (grew) {
       grew = false;
@@ -221,7 +224,7 @@ export class HostArena implements Arena {
     }
     const lines = parsed
       // tsx's compiler service only exists when running from source.
-      .filter((r) => r.pid !== process.pid && inMatch.has(r.pid) && !r.line.includes('@esbuild'))
+      .filter((r) => inMatch.has(r.pid))
       .map((r) => r.line);
     return [header, ...lines].join('\n') + '\n';
   }

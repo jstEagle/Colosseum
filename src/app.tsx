@@ -24,10 +24,12 @@ import { appendMatch } from './results.js';
 import { rememberLast, savePreset } from './presets.js';
 import { loadReplay, saveReplay, type Replay, type ReplayEvent } from './replays.js';
 import { NUMERALS } from './ascii.js';
+import { Series } from './series.js';
+import { SeriesView } from './components/SeriesView.js';
 import { theme } from './theme.js';
 import type { AgentEvent, AgentStatus, FeedEntry, Side } from './protocol.js';
 
-type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'replay' | 'result' | 'review' | 'hall';
+type Phase = 'setup' | 'keyerror' | 'countdown' | 'fighting' | 'replay' | 'result' | 'review' | 'hall' | 'series';
 
 const FEED_CAP = 400;
 const COUNT_FROM = 3;
@@ -83,6 +85,9 @@ export function App({ preset, replayId }: AppProps) {
   const [naming, setNaming] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
 
+  // A series of fights at once, while it runs and after, for its charts.
+  const [series, setSeries] = useState<Series | null>(null);
+
   const refereeRef = useRef<Referee | null>(null);
   const startRef = useRef<number>(0);
   const recording = useRef<ReplayEvent[]>([]);
@@ -109,7 +114,7 @@ export function App({ preset, replayId }: AppProps) {
     ].join('   ·   ');
   };
 
-  const handleComplete = (cfg: BattleConfig) => {
+  const handleComplete = (cfg: BattleConfig, count = 1) => {
     setConfig(cfg);
     const miss = blockers([cfg.left.provider, cfg.right.provider], cfg.sandbox);
     if (miss.length) {
@@ -117,8 +122,28 @@ export function App({ preset, replayId }: AppProps) {
       setPhase('keyerror');
       return;
     }
+    if (count > 1) {
+      startSeries(cfg, count);
+      return;
+    }
     setPhase('countdown');
     setCountdown(COUNT_FROM);
+  };
+
+  const startSeries = (cfg: BattleConfig, count: number) => {
+    series?.stop();
+    rememberLast(cfg);
+    // Eight at a time: each fight is two gladiators and up to nine decoys.
+    const next = new Series({ config: cfg, count, parallel: Math.min(count, 8), swap: true }).start();
+    setSeries(next);
+    setPhase('series');
+  };
+
+  const leaveSeries = () => {
+    series?.stop();
+    setSeries(null);
+    reset();
+    setPhase('setup');
   };
 
   const reset = () => {
@@ -258,6 +283,7 @@ export function App({ preset, replayId }: AppProps) {
     setReplaying(true);
     setPaused(false);
     playback.current = { replay, index: 0, clock: 0 };
+    if (series) setNotice('esc  back to the series');
     setPhase('replay');
   };
 
@@ -303,6 +329,7 @@ export function App({ preset, replayId }: AppProps) {
 
   // Cleanup on unmount.
   useEffect(() => () => refereeRef.current?.cleanup(), []);
+  useEffect(() => () => series?.stop(), [series]);
 
   const openHall = () => {
     setHallFrom(phase);
@@ -314,6 +341,7 @@ export function App({ preset, replayId }: AppProps) {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       refereeRef.current?.cleanup();
+      series?.stop();
       exit();
       return;
     }
@@ -341,7 +369,14 @@ export function App({ preset, replayId }: AppProps) {
     // model filter must not quit the game.
     if (input === 'q' && phase !== 'setup') {
       refereeRef.current?.cleanup();
+      series?.stop();
       exit();
+      return;
+    }
+    // A fight watched from a series goes back to the series.
+    if (series && key.escape && (phase === 'result' || phase === 'replay')) {
+      reset();
+      setPhase('series');
       return;
     }
     if ((phase === 'fighting' || phase === 'replay' || phase === 'review') && input === 'v') {
@@ -353,6 +388,8 @@ export function App({ preset, replayId }: AppProps) {
         reset();
         handleComplete(config);
       } else if (input === 'n') {
+        series?.stop();
+        setSeries(null);
         reset();
         setPhase('setup');
       } else if (input === 's' && config) setNaming('');
@@ -393,6 +430,20 @@ export function App({ preset, replayId }: AppProps) {
   }
 
   if (phase === 'hall') return <Leaderboard rows={termRows} cols={termCols} />;
+
+  if (phase === 'series' && series) {
+    return (
+      <SeriesView
+        series={series}
+        rows={termRows}
+        cols={termCols}
+        onReplay={startReplay}
+        onRerun={() => startSeries(series.options.config, series.options.count)}
+        onLeave={leaveSeries}
+        onHall={openHall}
+      />
+    );
+  }
 
   if (phase === 'keyerror') {
     return (
