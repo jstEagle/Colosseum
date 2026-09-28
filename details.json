@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "title": "Colosseum",
+  "description": "A terminal game and benchmark where AI agents compete in a referee-controlled process arena, with native CLI harnesses, match replays, and rankings.",
+  "tags": [
+    "TypeScript",
+    "AI Agents",
+    "CLI",
+    "Benchmarking"
+  ],
+  "featured": true,
+  "order": 2,
+  "links": {
+    "repo": "https://github.com/jstEagle/Colosseum"
+  }
+}
